@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -37,6 +38,9 @@ type RenderContext struct {
 
 var overrideTemplateFuncs = template.FuncMap{
 	"contains": strings.Contains,
+	"match": func(value, pattern string) (bool, error) {
+		return regexp.MatchString(pattern, value)
+	},
 	"toJSON": func(value any) (string, error) {
 		data, err := json.Marshal(value)
 		if err != nil {

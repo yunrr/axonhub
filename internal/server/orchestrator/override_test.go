@@ -284,6 +284,14 @@ func TestOverrideConditionContainsTemplate(t *testing.T) {
 	require.False(t, evaluateCondition(ctx, condition, RenderContext{Model: "gpt-4.1"}))
 }
 
+func TestOverrideConditionMatchTemplate(t *testing.T) {
+	ctx := context.Background()
+	condition := `{{if match .Model "(?i)grok"}}true{{end}}`
+
+	require.True(t, evaluateCondition(ctx, condition, RenderContext{Model: "Grok-3"}))
+	require.False(t, evaluateCondition(ctx, condition, RenderContext{Model: "gpt-4.1"}))
+}
+
 func TestOverrideParametersNumeric(t *testing.T) {
 	ctx := context.Background()
 
