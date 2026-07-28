@@ -543,7 +543,6 @@ export const createChannelInputSchema = z
     const isOAuthType =
       data.type === 'codex' || data.type === 'claudecode' || data.type === 'antigravity' || data.type === 'github_copilot';
     const hasApiKey = data.credentials.apiKey && data.credentials.apiKey.trim().length > 0;
-    const hasApiKeys = data.credentials.apiKeys && data.credentials.apiKeys.some((k) => k.trim().length > 0);
 
     // github_copilot requires credentials.apiKey (OAuth JSON with access_token)
     if (data.type === 'github_copilot' && !hasApiKey) {
@@ -551,15 +550,6 @@ export const createChannelInputSchema = z
         code: 'custom' as const,
         message: 'channels.dialogs.oauth.errors.copilotCredentialsRequired',
         path: ['credentials', 'apiKey'],
-      });
-    }
-
-    // Validate that at least one credential type is provided
-    if (!hasApiKey && !hasApiKeys && data.type !== 'anthropic_aws' && data.type !== 'anthropic_gcp') {
-      ctx.addIssue({
-        code: 'custom' as const,
-        message: 'At least one API Key is required',
-        path: ['credentials', 'apiKeys'],
       });
     }
 

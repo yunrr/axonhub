@@ -37,6 +37,21 @@ test('Cline has localized channel and provider labels', () => {
   }
 });
 
+test('channel creation permits empty regular API keys', () => {
+  const schema = read('features/channels/data/schema.ts');
+  const start = schema.indexOf('export const createChannelInputSchema');
+  const end = schema.indexOf('export type CreateChannelInput');
+  const createSchema = schema.slice(start, end);
+
+  assert.ok(start >= 0 && end > start, 'create channel schema should be present');
+  assert.doesNotMatch(createSchema, /At least one API Key is required/, 'regular channel API keys should be optional');
+  assert.match(
+    createSchema,
+    /data\.type === 'github_copilot'[\s\S]*copilotCredentialsRequired/,
+    'Copilot OAuth credentials should remain required'
+  );
+});
+
 test('channel proxy connection reuse setting is submitted, echoed, and localized', () => {
   const schema = read('features/channels/data/schema.ts');
   const channelsData = read('features/channels/data/channels.ts');
