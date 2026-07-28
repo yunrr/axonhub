@@ -20,7 +20,7 @@ generate-openapi:
 # Build the backend application
 build-backend:
 	@echo "Building axonhub backend..."
-	go build -ldflags "-s -w" -tags=nomsgpack -o axonhub ./cmd/axonhub
+	go build -ldflags "-s -w" -tags=nomsgpack -o axonhub.exe ./cmd/axonhub
 	@echo "Backend build completed!"
 
 # Build the frontend application
