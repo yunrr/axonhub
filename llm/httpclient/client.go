@@ -439,11 +439,15 @@ func applyAuth(headers http.Header, auth *AuthConfig) error {
 	switch auth.Type {
 	case "bearer":
 		if auth.APIKey == "" {
-			return fmt.Errorf("bearer token is required")
+			return nil
 		}
 
 		headers.Set("Authorization", "Bearer "+auth.APIKey)
 	case "api_key":
+		if auth.APIKey == "" {
+			return nil
+		}
+
 		if auth.HeaderKey == "" {
 			return fmt.Errorf("header key is required")
 		}

@@ -149,10 +149,7 @@ func buildChannel(c *ent.Channel, httpClient *httpclient.HttpClient) *Channel {
 
 // getAPIKeyProvider returns an APIKeyProvider based on the channel.
 // If multiple enabled API keys are configured, it returns a TraceStickyKeyProvider for consistent hashing.
-// Otherwise, it returns a StaticKeyProvider.
-//
-// NOTE: This function panics when there is no enabled API key. This is intended as an assertion:
-// buildChannelWithTransformer should validate channel credentials before constructing transformers.
+// Otherwise, it returns a StaticKeyProvider. An empty provider represents an unauthenticated channel.
 func getAPIKeyProvider(ch *Channel) auth.APIKeyProvider {
 	if ch.apiKeyOverride != "" {
 		return auth.NewStaticKeyProvider(ch.apiKeyOverride)
@@ -167,7 +164,7 @@ func getAPIKeyProvider(ch *Channel) auth.APIKeyProvider {
 		return auth.NewStaticKeyProvider(enabled[0])
 	}
 
-	panic(fmt.Errorf("no enabled api key configured for channel %s", ch.Name))
+	return auth.NewStaticKeyProvider("")
 }
 
 // BuildOutboundByAPIFormat returns the outbound transformer for a resolved endpoint API format.
@@ -451,7 +448,7 @@ func (svc *ChannelService) buildNonDefaultEndpointOutbound(
 
 //nolint:maintidx // Checked.
 func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOverride ...string) (*Channel, error) {
-	// Validate credentials early so we can fail fast without constructing HTTP clients/transformers.
+	// Validate credentials required by channel types with provider-specific authentication.
 	//
 	// NOTE: "enabled" keys excludes keys that were explicitly disabled for this channel.
 	enabledKeys := c.Credentials.GetEnabledAPIKeys(c.DisabledAPIKeys)
@@ -476,14 +473,6 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 		// These channel types don't use API keys:
 		// - anthropic_gcp uses GCP credentials JSON
 		// - *_fake are test-only
-	case channel.TypeOllama, channel.TypeOllamaAnthropic:
-		// Ollama is often run locally without an API key. An apiKeyOverride
-		// (channel key test flow) may also supply a key when none are stored,
-		// so skip the stored-key check here.
-	default:
-		if len(enabledKeys) == 0 {
-			return nil, fmt.Errorf("missing api key for channel %s", c.Name)
-		}
 	}
 
 	httpClient := svc.getHttpClient(c.Settings)

@@ -613,8 +613,23 @@ func Test_applyAuth(t *testing.T) {
 			auth: &AuthConfig{
 				Type: "bearer",
 			},
-			wantErr:       true,
-			wantErrString: "bearer token is required",
+			wantErr: false,
+			validate: func(req *http.Request) bool {
+				_, exists := req.Header["Authorization"]
+				return !exists
+			},
+		},
+		{
+			name: "api_key auth without key",
+			auth: &AuthConfig{
+				Type:      "api_key",
+				HeaderKey: "X-API-Key",
+			},
+			wantErr: false,
+			validate: func(req *http.Request) bool {
+				_, exists := req.Header["X-Api-Key"]
+				return !exists
+			},
 		},
 		{
 			name: "api_key auth without header key",
