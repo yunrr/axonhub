@@ -36,6 +36,7 @@ type RenderContext struct {
 }
 
 var overrideTemplateFuncs = template.FuncMap{
+	"contains": strings.Contains,
 	"toJSON": func(value any) (string, error) {
 		data, err := json.Marshal(value)
 		if err != nil {

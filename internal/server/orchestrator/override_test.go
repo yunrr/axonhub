@@ -276,6 +276,14 @@ func TestOverrideParametersComplex(t *testing.T) {
 	require.Equal(t, "env-prod", processedRequestWithHeaders.Headers.Get("X-Logic-Header"))
 }
 
+func TestOverrideConditionContainsTemplate(t *testing.T) {
+	ctx := context.Background()
+	condition := `{{if contains .Model "grok"}}true{{end}}`
+
+	require.True(t, evaluateCondition(ctx, condition, RenderContext{Model: "grok-3"}))
+	require.False(t, evaluateCondition(ctx, condition, RenderContext{Model: "gpt-4.1"}))
+}
+
 func TestOverrideParametersNumeric(t *testing.T) {
 	ctx := context.Background()
 

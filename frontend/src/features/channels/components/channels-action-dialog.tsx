@@ -1481,24 +1481,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
 
   const canFetchModels = () => {
     const baseURL = form.watch('baseURL');
-    const apiKeys = form.watch('credentials.apiKeys');
-    const hasApiKey = apiKeys?.some((key) => key.trim().length > 0);
-
-    if (isCodexType || isAntigravityType || isClineType) {
-      return !!baseURL;
-    }
-
-    if (isCopilotType) {
-      const oauthApiKey = form.watch('credentials.apiKey');
-      const hasOAuthToken = !!parseOauthToken(oauthApiKey || '');
-      return !!baseURL && hasOAuthToken;
-    }
-
-    if (isEdit) {
-      return !!baseURL;
-    }
-
-    return !!baseURL && hasApiKey;
+    return !!baseURL;
   };
   // Memoize quick models to avoid re-evaluating on every render
   const currentType = form.watch('type');

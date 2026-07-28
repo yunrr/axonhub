@@ -1065,7 +1065,7 @@ function readPromptTokensCondition(
   }
 
   const condition = when.condition;
-  if (!when.enabled || !condition) {
+  if (!condition) {
     return { enabled: Boolean(when.enabled), condition: DEFAULT_WHEN_CONDITION };
   }
 
@@ -1160,12 +1160,12 @@ function buildAssociationWhen(enabled?: boolean, value?: FilterBuilderGroupListV
     .map((group) => sanitizeWhenCondition(group))
     .filter((item): item is FilterBuilderCondition => item !== null);
 
-  if (!enabled || groups.length === 0) {
+  if (groups.length === 0) {
     return null;
   }
 
   return {
-    enabled: true,
+    enabled: Boolean(enabled),
     condition: {
       type: 'group',
       logic: 'and',

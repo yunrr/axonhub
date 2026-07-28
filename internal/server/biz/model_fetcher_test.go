@@ -511,6 +511,33 @@ func TestFetchModelsGeminiPagination(t *testing.T) {
 	}
 }
 
+func TestFetchModelsWithoutAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization header = %q, want empty", got)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"public-model"}]}`))
+	}))
+	defer server.Close()
+
+	fetcher := NewModelFetcher(httpclient.NewHttpClientWithClient(server.Client()), nil)
+	result, err := fetcher.FetchModels(context.Background(), FetchModelsInput{
+		ChannelType: channel.TypeOpenai.String(),
+		BaseURL:     server.URL,
+	})
+	if err != nil {
+		t.Fatalf("FetchModels() unexpected error: %v", err)
+	}
+	if result.Error != nil {
+		t.Fatalf("FetchModels() expected nil result.Error, got: %v", *result.Error)
+	}
+	if len(result.Models) != 1 || result.Models[0].ID != "public-model" {
+		t.Fatalf("unexpected models: %#v", result.Models)
+	}
+}
+
 func TestFetchModelsWithChannelIDUsesStoredCredentialsOnlyForStoredEndpoint(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

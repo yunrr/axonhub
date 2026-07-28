@@ -303,10 +303,6 @@ func (f *ModelFetcher) FetchModels(ctx context.Context, input FetchModelsInput) 
 				return &FetchModelsResult{Models: models}, nil
 			}
 		}
-		return &FetchModelsResult{
-			Models: []ModelIdentify{},
-			Error:  lo.ToPtr("API key is required"),
-		}, nil
 	}
 
 	if isOAuthJSON(apiKey) {
@@ -347,12 +343,14 @@ func (f *ModelFetcher) FetchModels(ctx context.Context, input FetchModelsInput) 
 		Headers: authHeaders,
 	}
 
-	if channelType.UsesAnthropicModelAPI() {
-		req.Headers.Set("X-Api-Key", apiKey)
-	} else if channelType.IsGemini() {
-		req.Headers.Set("X-Goog-Api-Key", apiKey)
-	} else {
-		req.Headers.Set("Authorization", "Bearer "+apiKey)
+	if apiKey != "" {
+		if channelType.UsesAnthropicModelAPI() {
+			req.Headers.Set("X-Api-Key", apiKey)
+		} else if channelType.IsGemini() {
+			req.Headers.Set("X-Goog-Api-Key", apiKey)
+		} else {
+			req.Headers.Set("Authorization", "Bearer "+apiKey)
+		}
 	}
 
 	httpClient := f.httpClient
@@ -382,7 +380,7 @@ func (f *ModelFetcher) FetchModels(ctx context.Context, input FetchModelsInput) 
 
 	if channelType.UsesAnthropicModelAPI() {
 		resp, err = httpClient.Do(ctx, req)
-		if err != nil || resp.StatusCode != http.StatusOK {
+		if apiKey != "" && (err != nil || resp.StatusCode != http.StatusOK) {
 			req.Headers.Del("X-Api-Key")
 			req.Headers.Set("Authorization", "Bearer "+apiKey)
 			resp, err = httpClient.Do(ctx, req)
