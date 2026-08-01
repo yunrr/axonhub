@@ -152,16 +152,16 @@ func buildChannel(c *ent.Channel, httpClient *httpclient.HttpClient) *Channel {
 // Otherwise, it returns a StaticKeyProvider. An empty provider represents an unauthenticated channel.
 func getAPIKeyProvider(ch *Channel) auth.APIKeyProvider {
 	if ch.apiKeyOverride != "" {
-		return auth.NewStaticKeyProvider(ch.apiKeyOverride)
+		return NewChannelAPIKeyContextProvider(auth.NewStaticKeyProvider(ch.apiKeyOverride))
 	}
 
 	enabled := ch.cachedEnabledAPIKeys
 	if len(enabled) > 1 {
-		return NewTraceStickyKeyProvider(ch)
+		return NewChannelAPIKeyContextProvider(NewTraceStickyKeyProvider(ch))
 	}
 
 	if len(enabled) == 1 {
-		return auth.NewStaticKeyProvider(enabled[0])
+		return NewChannelAPIKeyContextProvider(auth.NewStaticKeyProvider(enabled[0]))
 	}
 
 	return auth.NewStaticKeyProvider("")

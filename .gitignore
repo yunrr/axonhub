@@ -11,9 +11,6 @@
 !Dockerfile
 !VERSION
 
-# Local backend build output
-axonhub.exe
-
 
 # Unignore all dirs
 !*/
@@ -170,4 +167,4 @@ config.schema.json
 .omc/
 .playwright-mcp/
 .ace-tool/
-.context/
+.omx/
