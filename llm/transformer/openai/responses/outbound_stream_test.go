@@ -211,6 +211,45 @@ func TestOutboundTransformer_TransformStream_AssociatesReasoningSummaryWithItem(
 	require.Equal(t, []string{"rs_first", "rs_second"}, summaryItemIDs)
 }
 
+// TestOutboundTransformer_TransformStream_HandlesReasoningText verifies that
+// official reasoning_text events become unified reasoning deltas without duplication.
+func TestOutboundTransformer_TransformStream_HandlesReasoningText(t *testing.T) {
+	trans, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	events := []*httpclient.StreamEvent{
+		{Type: "response.created", Data: []byte(`{"type":"response.created","response":{"id":"resp_reasoning_text","object":"response","created_at":1700000000,"model":"deepseek-v4-flash","status":"in_progress","output":[]}}`)},
+		{Type: "response.output_item.added", Data: []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"rs_text","type":"reasoning","status":"in_progress","summary":[],"content":[]}}`)},
+		{Type: "response.reasoning_text.delta", Data: []byte(`{"type":"response.reasoning_text.delta","item_id":"rs_text","output_index":0,"content_index":0,"delta":"first"}`)},
+		{Type: "response.reasoning_text.delta", Data: []byte(`{"type":"response.reasoning_text.delta","item_id":"rs_text","output_index":0,"content_index":0,"delta":" second"}`)},
+		{Type: "response.reasoning_text.done", Data: []byte(`{"type":"response.reasoning_text.done","item_id":"rs_text","output_index":0,"content_index":0,"text":"first second"}`)},
+		{Type: "response.output_item.done", Data: []byte(`{"type":"response.output_item.done","output_index":0,"item":{"id":"rs_text","type":"reasoning","status":"completed","summary":[],"content":[{"type":"reasoning_text","text":"first second"}]}}`)},
+		{Type: "response.completed", Data: []byte(`{"type":"response.completed","response":{"id":"resp_reasoning_text","object":"response","created_at":1700000000,"model":"deepseek-v4-flash","status":"completed","output":[]}}`)},
+	}
+
+	stream, err := trans.TransformStream(t.Context(), nil, streams.SliceStream(events))
+	require.NoError(t, err)
+
+	responses, err := streams.All(stream)
+	require.NoError(t, err)
+
+	var deltas []string
+	var itemIDs []string
+	for _, response := range responses {
+		if response == llm.DoneResponse || len(response.Choices) == 0 || response.Choices[0].Delta == nil || response.Choices[0].Delta.ReasoningContent == nil {
+			continue
+		}
+
+		deltas = append(deltas, *response.Choices[0].Delta.ReasoningContent)
+		metadata, ok := getResponsesReasoningItemMetadata(response.TransformerMetadata)
+		require.True(t, ok)
+		itemIDs = append(itemIDs, metadata.ID)
+	}
+
+	require.Equal(t, []string{"first", " second"}, deltas)
+	require.Equal(t, []string{"rs_text", "rs_text"}, itemIDs)
+}
+
 func TestResponsesTransformer_StreamRoundTrip_PreservesCompactionSummary(t *testing.T) {
 	outbound, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
 	require.NoError(t, err)
@@ -293,6 +332,193 @@ func TestOutboundTransformer_TransformStream_ResponseCancelledCompletes(t *testi
 	require.NotEmpty(t, responses[1].Choices)
 	require.NotNil(t, responses[1].Choices[0].FinishReason)
 	require.Equal(t, "cancelled", *responses[1].Choices[0].FinishReason)
+}
+
+func TestOutboundTransformer_TransformStream_EmitsArgumentsProvidedOnlyInDone(t *testing.T) {
+	trans, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	events := []*httpclient.StreamEvent{
+		{Data: []byte(`{"type":"response.created","response":{"id":"resp_done_arguments","object":"response","created_at":1700000000,"model":"gpt-5","status":"in_progress","output":[]}}`)},
+		{Data: []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_done_arguments","type":"function_call","call_id":"call_done_arguments","name":"collaboration.spawn_agent","arguments":""}}`)},
+		{Data: []byte(`{"type":"response.function_call_arguments.done","item_id":"fc_done_arguments","output_index":0,"name":"collaboration.spawn_agent","arguments":"{\"task\":\"delegate this task\"}"}`)},
+		{Data: []byte(`{"type":"response.completed","response":{"id":"resp_done_arguments","object":"response","created_at":1700000000,"model":"gpt-5","status":"completed","output":[]}}`)},
+	}
+
+	stream, err := trans.TransformStream(t.Context(), nil, streams.SliceStream(events))
+	require.NoError(t, err)
+
+	responses, err := streams.All(stream)
+	require.NoError(t, err)
+
+	var arguments string
+	for _, response := range responses {
+		if response == llm.DoneResponse || len(response.Choices) == 0 || response.Choices[0].Delta == nil {
+			continue
+		}
+
+		for _, toolCall := range response.Choices[0].Delta.ToolCalls {
+			arguments += toolCall.Function.Arguments
+		}
+	}
+
+	require.JSONEq(t, `{"task":"delegate this task"}`, arguments)
+}
+
+func TestOutboundTransformer_TransformStream_AcceptsEquivalentFinalArguments(t *testing.T) {
+	trans, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	forwardedArguments := `{"task":"delegate this task","priority":1}`
+	finalArguments := `{
+  "priority": 1,
+  "task": "delegate this task"
+}`
+	events := []*httpclient.StreamEvent{
+		{Data: []byte(`{"type":"response.created","response":{"id":"resp_equivalent_arguments","object":"response","created_at":1700000000,"model":"gpt-5","status":"in_progress","output":[]}}`)},
+		{Data: []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_equivalent_arguments","type":"function_call","call_id":"call_equivalent_arguments","name":"spawn_agent","arguments":""}}`)},
+		{Data: []byte(`{"type":"response.function_call_arguments.delta","item_id":"fc_equivalent_arguments","output_index":0,"delta":"{\"task\":\"delegate this task\",\"priority\":1}"}`)},
+		{Data: []byte(`{"type":"response.function_call_arguments.done","item_id":"fc_equivalent_arguments","output_index":0,"arguments":"{\n  \"priority\": 1,\n  \"task\": \"delegate this task\"\n}"}`)},
+		{Data: []byte(`{"type":"response.completed","response":{"id":"resp_equivalent_arguments","object":"response","created_at":1700000000,"model":"gpt-5","status":"completed","output":[]}}`)},
+	}
+
+	stream, err := trans.TransformStream(t.Context(), nil, streams.SliceStream(events))
+	require.NoError(t, err)
+
+	responses, err := streams.All(stream)
+	require.NoError(t, err)
+
+	var arguments string
+	for _, response := range responses {
+		if response == llm.DoneResponse || len(response.Choices) == 0 || response.Choices[0].Delta == nil {
+			continue
+		}
+
+		for _, toolCall := range response.Choices[0].Delta.ToolCalls {
+			arguments += toolCall.Function.Arguments
+		}
+	}
+
+	require.Equal(t, forwardedArguments, arguments)
+	require.JSONEq(t, finalArguments, arguments)
+}
+
+func TestOutboundTransformer_TransformStream_RejectsDistinctLargeJSONNumbers(t *testing.T) {
+	trans, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	events := []*httpclient.StreamEvent{
+		{Data: []byte(`{"type":"response.created","response":{"id":"resp_large_numbers","object":"response","created_at":1700000000,"model":"gpt-5","status":"in_progress","output":[]}}`)},
+		{Data: []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_large_numbers","type":"function_call","call_id":"call_large_numbers","name":"spawn_agent","arguments":""}}`)},
+		{Data: []byte(`{"type":"response.function_call_arguments.delta","item_id":"fc_large_numbers","output_index":0,"delta":"{\"value\":9007199254740992}"}`)},
+		{Data: []byte(`{"type":"response.function_call_arguments.done","item_id":"fc_large_numbers","output_index":0,"arguments":"{\"value\":9007199254740993}"}`)},
+	}
+
+	stream, err := trans.TransformStream(t.Context(), nil, streams.SliceStream(events))
+	require.NoError(t, err)
+
+	_, err = streams.All(stream)
+	require.ErrorContains(t, err, `function call arguments mismatch for call_id "call_large_numbers"`)
+}
+
+func TestResponsesStream_RoundTrip_PreservesToolIdentityProvidedOnlyInDone(t *testing.T) {
+	outbound, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	upstreamEvents := []*httpclient.StreamEvent{
+		{Data: []byte(`{"type":"response.created","response":{"id":"resp_done_identity","object":"response","created_at":1700000000,"model":"gpt-5","status":"in_progress","output":[]}}`)},
+		{Data: []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_done_identity","type":"function_call","call_id":"call_done_identity","arguments":""}}`)},
+		{Data: []byte(`{"type":"response.function_call_arguments.done","item_id":"fc_done_identity","output_index":0,"name":"spawn_agent","namespace":"collaboration","arguments":"{\"task\":\"delegate this task\"}"}`)},
+		{Data: []byte(`{"type":"response.completed","response":{"id":"resp_done_identity","object":"response","created_at":1700000000,"model":"gpt-5","status":"completed","output":[]}}`)},
+	}
+
+	unifiedStream, err := outbound.TransformStream(t.Context(), nil, streams.SliceStream(upstreamEvents))
+	require.NoError(t, err)
+
+	clientStream, err := NewInboundTransformer().TransformStream(t.Context(), unifiedStream)
+	require.NoError(t, err)
+
+	clientEvents, err := streams.All(clientStream)
+	require.NoError(t, err)
+
+	var addedItem *Item
+	var completedItem *Item
+	var completedArguments *StreamEvent
+	for _, clientEvent := range clientEvents {
+		if string(clientEvent.Data) == "[DONE]" {
+			continue
+		}
+
+		var event StreamEvent
+		require.NoError(t, json.Unmarshal(clientEvent.Data, &event))
+		if event.Type == StreamEventTypeOutputItemAdded && event.Item != nil && event.Item.Type == "function_call" {
+			addedItem = event.Item
+		}
+		if event.Type == StreamEventTypeOutputItemDone && event.Item != nil && event.Item.Type == "function_call" {
+			completedItem = event.Item
+		}
+		if event.Type == StreamEventTypeFunctionCallArgumentsDone {
+			completedArguments = &event
+		}
+	}
+
+	require.NotNil(t, addedItem)
+	require.NotNil(t, completedItem)
+	require.NotNil(t, completedArguments)
+	require.Equal(t, "call_done_identity", completedArguments.CallID)
+	require.Equal(t, "spawn_agent", completedArguments.Name)
+	require.Equal(t, "collaboration", completedArguments.Namespace)
+	require.JSONEq(t, `{"task":"delegate this task"}`, completedArguments.Arguments)
+	require.Equal(t, "spawn_agent", addedItem.Name)
+	require.Equal(t, "collaboration", addedItem.Namespace)
+	require.Equal(t, "spawn_agent", completedItem.Name)
+	require.Equal(t, "collaboration", completedItem.Namespace)
+	require.JSONEq(t, `{"task":"delegate this task"}`, completedItem.Arguments)
+}
+
+func TestResponsesStream_RoundTrip_DefersFunctionCallUntilLateIdentityArrives(t *testing.T) {
+	outbound, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	arguments := `{"task":"delegate this task"}`
+	upstreamEvents := []*httpclient.StreamEvent{
+		{Data: []byte(`{"type":"response.created","response":{"id":"resp_late_identity","object":"response","created_at":1700000000,"model":"gpt-5","status":"in_progress","output":[]}}`)},
+		{Data: []byte(`{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_late_identity","type":"function_call","call_id":"call_late_identity","arguments":""}}`)},
+		{Data: []byte(`{"type":"response.function_call_arguments.delta","item_id":"fc_late_identity","output_index":0,"delta":"{\"task\":\"delegate this task\"}"}`)},
+		{Data: []byte(`{"type":"response.function_call_arguments.done","item_id":"fc_late_identity","output_index":0,"name":"spawn_agent","namespace":"collaboration","arguments":"{\"task\":\"delegate this task\"}"}`)},
+		{Data: []byte(`{"type":"response.completed","response":{"id":"resp_late_identity","object":"response","created_at":1700000000,"model":"gpt-5","status":"completed","output":[]}}`)},
+	}
+
+	unifiedStream, err := outbound.TransformStream(t.Context(), nil, streams.SliceStream(upstreamEvents))
+	require.NoError(t, err)
+
+	clientStream, err := NewInboundTransformer().TransformStream(t.Context(), unifiedStream)
+	require.NoError(t, err)
+
+	clientEvents, err := streams.All(clientStream)
+	require.NoError(t, err)
+
+	var addedItems []*Item
+	var receivedArguments string
+	for _, clientEvent := range clientEvents {
+		if string(clientEvent.Data) == "[DONE]" {
+			continue
+		}
+
+		var event StreamEvent
+		require.NoError(t, json.Unmarshal(clientEvent.Data, &event))
+		if event.Type == StreamEventTypeOutputItemAdded && event.Item != nil && event.Item.Type == "function_call" {
+			addedItems = append(addedItems, event.Item)
+		}
+		if event.Type == StreamEventTypeFunctionCallArgumentsDelta {
+			receivedArguments += event.Delta
+		}
+	}
+
+	require.Len(t, addedItems, 1)
+	require.Equal(t, "spawn_agent", addedItems[0].Name)
+	require.Equal(t, "collaboration", addedItems[0].Namespace)
+	require.JSONEq(t, arguments, receivedArguments)
 }
 
 func TestOutboundTransformer_TransformStream_PreservesFinalItemAnnotations(t *testing.T) {

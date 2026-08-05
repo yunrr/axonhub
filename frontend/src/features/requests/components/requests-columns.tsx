@@ -190,7 +190,12 @@ export function useRequestsColumns(options?: UseRequestsColumnsOptions): ColumnD
       enableSorting: false,
       enableHiding: true,
       cell: ({ row }) => {
-        const reasoningEffort = row.original.reasoningEffort;
+        const latestExecution = row.original.executions?.edges?.[0]?.node;
+        const reasoningEffort = latestExecution
+          ? latestExecution.reasoningEffort
+          : row.original.status === 'processing'
+            ? undefined
+            : row.original.reasoningEffort;
 
         if (!reasoningEffort) {
           return <div className='text-muted-foreground text-xs'>-</div>;
@@ -581,7 +586,7 @@ export function useRequestsColumns(options?: UseRequestsColumnsOptions): ColumnD
           <div className='font-mono text-xs font-medium'>
             {t('currencies.format', {
               val: cost,
-              currency: settings?.currencyCode,
+              currency: settings?.currencyCode ?? 'USD',
               locale: i18n.language === 'zh' ? 'zh-CN' : 'en-US',
               minimumFractionDigits: 6,
             })}

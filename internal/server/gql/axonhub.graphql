@@ -62,6 +62,7 @@ type TransformOptions {
   forceArrayInputs: Boolean!
   replaceDeveloperRoleWithSystem: Boolean!
   reasoningEffortMapping: [ReasoningEffortMapping!]
+  downgradeMidConversationSystem: Boolean
 }
 
 type SyncChannelModelsPayload {
@@ -79,6 +80,7 @@ input TransformOptionsInput {
   forceArrayInputs: Boolean
   replaceDeveloperRoleWithSystem: Boolean
   reasoningEffortMapping: [ReasoningEffortMappingInput!]
+  downgradeMidConversationSystem: Boolean
 }
 
 enum ProxyType {
@@ -402,6 +404,7 @@ input APIKeyProfileInput {
   modelIDs: [String!]
   quota: APIKeyQuotaInput
   loadBalanceStrategy: String
+  traceStickyMode: String
 }
 
 input UpdateProjectProfilesInput {
@@ -446,6 +449,7 @@ type APIKeyProfile {
   modelIDs: [String!]
   quota: APIKeyQuota
   loadBalanceStrategy: String
+  traceStickyMode: String
 }
 
 enum ChannelTagsMatchMode {
