@@ -77,7 +77,7 @@ const CREATE_CHANNEL_MUTATION = `
       status
       policies {
         stream
-        apiKeyAutoDisableRules { statusCodes keywordPatterns times action disableDurationMinutes }
+        apiKeyAutoDisableRules { statusCodes keywordPatterns times action disableDurationMinutes disableUntilCron disableUntilTimezone }
       }
       supportedModels
       autoSyncSupportedModels
@@ -107,7 +107,6 @@ const CREATE_CHANNEL_MUTATION = `
           forceArrayInputs
           replaceDeveloperRoleWithSystem
           reasoningEffortMapping { from to }
-          downgradeMidConversationSystem
         }
         passThroughUserAgent
         passThroughBody
@@ -153,7 +152,7 @@ const DUPLICATE_CHANNEL_MUTATION = `
       status
       policies {
         stream
-        apiKeyAutoDisableRules { statusCodes keywordPatterns times action disableDurationMinutes }
+        apiKeyAutoDisableRules { statusCodes keywordPatterns times action disableDurationMinutes disableUntilCron disableUntilTimezone }
       }
       supportedModels
       autoSyncSupportedModels
@@ -183,7 +182,6 @@ const DUPLICATE_CHANNEL_MUTATION = `
           forceArrayInputs
           replaceDeveloperRoleWithSystem
           reasoningEffortMapping { from to }
-          downgradeMidConversationSystem
         }
         passThroughUserAgent
         passThroughBody
@@ -229,7 +227,7 @@ const BULK_CREATE_CHANNELS_MUTATION = `
       status
       policies {
         stream
-        apiKeyAutoDisableRules { statusCodes keywordPatterns times action disableDurationMinutes }
+        apiKeyAutoDisableRules { statusCodes keywordPatterns times action disableDurationMinutes disableUntilCron disableUntilTimezone }
       }
       supportedModels
       autoSyncSupportedModels
@@ -259,7 +257,6 @@ const BULK_CREATE_CHANNELS_MUTATION = `
           forceArrayInputs
           replaceDeveloperRoleWithSystem
           reasoningEffortMapping { from to }
-          downgradeMidConversationSystem
         }
         passThroughUserAgent
         passThroughBody
@@ -305,7 +302,7 @@ const UPDATE_CHANNEL_MUTATION = `
       status
       policies {
         stream
-        apiKeyAutoDisableRules { statusCodes keywordPatterns times action disableDurationMinutes }
+        apiKeyAutoDisableRules { statusCodes keywordPatterns times action disableDurationMinutes disableUntilCron disableUntilTimezone }
       }
       supportedModels
       autoSyncSupportedModels
@@ -335,7 +332,6 @@ const UPDATE_CHANNEL_MUTATION = `
           forceArrayInputs
           replaceDeveloperRoleWithSystem
           reasoningEffortMapping { from to }
-          downgradeMidConversationSystem
         }
         passThroughUserAgent
         passThroughBody
@@ -526,7 +522,6 @@ const BULK_IMPORT_CHANNELS_MUTATION = `
             forceArrayInputs
             replaceDeveloperRoleWithSystem
             reasoningEffortMapping { from to }
-            downgradeMidConversationSystem
           }
           passThroughUserAgent
           passThroughBody
@@ -758,7 +753,6 @@ const BULK_UPDATE_CHANNEL_ORDERING_MUTATION = `
             forceArrayInputs
             replaceDeveloperRoleWithSystem
             reasoningEffortMapping { from to }
-            downgradeMidConversationSystem
           }
           passThroughUserAgent
           passThroughBody
@@ -844,7 +838,7 @@ const QUERY_CHANNELS_QUERY = `
           status
           policies {
             stream
-            apiKeyAutoDisableRules { statusCodes keywordPatterns times action disableDurationMinutes }
+            apiKeyAutoDisableRules { statusCodes keywordPatterns times action disableDurationMinutes disableUntilCron disableUntilTimezone }
           }
           credentials {
             apiKey
@@ -911,7 +905,6 @@ const QUERY_CHANNELS_QUERY = `
               forceArrayInputs
               replaceDeveloperRoleWithSystem
               reasoningEffortMapping { from to }
-              downgradeMidConversationSystem
             }
             passThroughUserAgent
             passThroughBody

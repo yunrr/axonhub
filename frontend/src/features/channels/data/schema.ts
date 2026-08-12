@@ -59,6 +59,9 @@ export const channelTypeSchema = z.enum([
   'openai',
   'openai_responses',
   'atlascloud',
+  'qiniu',
+  'qiniu_anthropic',
+  'fenno',
   'cline',
   'codex',
   'anthropic',
@@ -70,7 +73,6 @@ export const channelTypeSchema = z.enum([
   'deepseek',
   'deepseek_anthropic',
   'deepinfra',
-  'qiniu',
   'doubao',
   'doubao_anthropic',
   'moonshot',
@@ -127,7 +129,12 @@ export type ChannelStatus = z.infer<typeof channelStatusSchema>;
 export const capabilityPolicySchema = z.enum(['unlimited', 'require', 'forbid']);
 export type CapabilityPolicy = z.infer<typeof capabilityPolicySchema>;
 
-export const apiKeyAutoDisableActionSchema = z.enum(['temporary_disable', 'permanent_disable_delete']);
+export const apiKeyAutoDisableActionSchema = z.enum([
+  'temporary_disable',
+  'disable_until_cron',
+  'permanent_disable',
+  'permanent_disable_delete',
+]);
 export type APIKeyAutoDisableAction = z.infer<typeof apiKeyAutoDisableActionSchema>;
 
 export const apiKeyAutoDisableRuleSchema = z.object({
@@ -136,6 +143,8 @@ export const apiKeyAutoDisableRuleSchema = z.object({
   times: z.number().int().min(1),
   action: apiKeyAutoDisableActionSchema,
   disableDurationMinutes: z.number().int().positive().optional().nullable(),
+  disableUntilCron: z.string().optional().nullable(),
+  disableUntilTimezone: z.string().optional().nullable(),
 });
 export type APIKeyAutoDisableRule = z.infer<typeof apiKeyAutoDisableRuleSchema>;
 
@@ -147,6 +156,10 @@ export const apiKeyAutoDisableRuleFormSchema = apiKeyAutoDisableRuleSchema
   .refine((rule) => rule.action !== 'temporary_disable' || (rule.disableDurationMinutes ?? 0) > 0, {
     message: 'Temporary disable requires a duration',
     path: ['disableDurationMinutes'],
+  })
+  .refine((rule) => rule.action !== 'disable_until_cron' || (rule.disableUntilCron ?? '').trim() !== '', {
+    message: 'Scheduled recovery requires a cron expression',
+    path: ['disableUntilCron'],
   });
 
 export const channelPoliciesSchema = z.object({
@@ -215,7 +228,6 @@ export const transformOptionsSchema = z.object({
   forceArrayInputs: z.boolean().optional(),
   replaceDeveloperRoleWithSystem: z.boolean().optional(),
   reasoningEffortMapping: z.array(reasoningEffortMappingSchema).nullish(),
-  downgradeMidConversationSystem: z.boolean().nullish(),
 });
 export type TransformOptions = z.infer<typeof transformOptionsSchema>;
 
@@ -338,6 +350,11 @@ export const disabledAPIKeySchema = z.object({
   expiresAt: z.string().optional().nullable(),
 });
 export type DisabledAPIKey = z.infer<typeof disabledAPIKeySchema>;
+
+// Sentinel the backend uses to identify a channel's OAuth credential in the
+// disable bookkeeping (see objects.OAuthCredentialRef). It is not a real key,
+// so it must be labelled rather than masked, and it cannot be deleted.
+export const OAUTH_CREDENTIAL_REF = '__oauth__';
 
 // Channel
 export const channelSchema = z.object({

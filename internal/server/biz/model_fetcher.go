@@ -174,6 +174,10 @@ type FetchModelsResult struct {
 
 var qiniuFallbackModels = []ModelIdentify{{ID: "deepseek-v3"}}
 
+func isQiniuChannelType(channelType channel.Type) bool {
+	return channelType == channel.TypeQiniu || channelType == channel.TypeQiniuAnthropic
+}
+
 func (f *ModelFetcher) getDefaultModelsByType(ctx context.Context, typ channel.Type) []ModelIdentify {
 	//nolint:exhaustive // only supports default model fetching for specific channel types.
 	switch typ {
@@ -405,7 +409,7 @@ func (f *ModelFetcher) FetchModels(ctx context.Context, input FetchModelsInput) 
 	channelType := channel.Type(input.ChannelType)
 
 	if apiKey == "" {
-		if channelType == channel.TypeQiniu {
+		if isQiniuChannelType(channelType) {
 			return &FetchModelsResult{
 				Models: qiniuFallbackModels,
 			}, nil
@@ -502,7 +506,7 @@ func (f *ModelFetcher) FetchModels(ctx context.Context, input FetchModelsInput) 
 	}
 
 	if err != nil {
-		if channelType == channel.TypeQiniu {
+		if isQiniuChannelType(channelType) {
 			return &FetchModelsResult{
 				Models: qiniuFallbackModels,
 			}, nil
@@ -514,7 +518,7 @@ func (f *ModelFetcher) FetchModels(ctx context.Context, input FetchModelsInput) 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		if channelType == channel.TypeQiniu {
+		if isQiniuChannelType(channelType) {
 			return &FetchModelsResult{
 				Models: qiniuFallbackModels,
 			}, nil
@@ -527,7 +531,7 @@ func (f *ModelFetcher) FetchModels(ctx context.Context, input FetchModelsInput) 
 
 	models, err := f.parseModelsResponse(resp.Body)
 	if err != nil {
-		if channelType == channel.TypeQiniu {
+		if isQiniuChannelType(channelType) {
 			return &FetchModelsResult{
 				Models: qiniuFallbackModels,
 			}, nil

@@ -21,7 +21,9 @@ import (
 
 // ErrStreamIncomplete is returned when the stream ends without a terminal event
 // (response.completed, response.failed, response.cancelled, or response.incomplete).
-var ErrStreamIncomplete = errors.New("stream ended without terminal event")
+// Keep this package alias for callers that already reference the Responses
+// transformer sentinel; retry policy should depend on the shared llm error.
+var ErrStreamIncomplete = llm.ErrStreamIncomplete
 
 // TransformStream transforms OpenAI Responses API SSE events to unified llm.Response stream.
 func (t *OutboundTransformer) TransformStream(
@@ -46,7 +48,8 @@ type responsesOutboundStream struct {
 	queueIndex int
 	err        error
 
-	// Track whether the response completed successfully
+	// Track whether the response reached a real terminal event. A synthetic or
+	// provider `[DONE]` marker is valid only after this becomes true.
 	responseCompleted bool
 }
 
@@ -107,11 +110,7 @@ func (s *responsesOutboundStream) Next() bool {
 		// Stream ended - check if we received a terminal event
 		// If not, this is an incomplete stream (e.g., upstream EOF)
 		if s.err == nil && !s.responseCompleted && s.stream.Err() == nil {
-			// Only set this error if we had started receiving response data
-			// This distinguishes between "no response" and "incomplete response"
-			if s.state.responseID != "" {
-				s.err = ErrStreamIncomplete
-			}
+			s.err = ErrStreamIncomplete
 		}
 		return false
 	}
@@ -137,8 +136,14 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 		return nil
 	}
 
-	// Handle [DONE] marker
+	// Handle [DONE] marker only after a real Responses terminal event. A
+	// synthetic marker appended after a clean upstream EOF must surface the
+	// incomplete-stream error before retry, client, or persistence boundaries.
 	if string(event.Data) == "[DONE]" {
+		if !s.responseCompleted {
+			return ErrStreamIncomplete
+		}
+
 		s.enqueue(llm.DoneResponse)
 		return nil
 	}
@@ -591,9 +596,39 @@ func (s *responsesOutboundStream) transformStreamChunk(event *httpclient.StreamE
 			s.state.transformerMetadataEmitted = true
 		}
 
-		finishReason := "stop"
-		if len(s.state.toolCalls) > 0 {
-			finishReason = "tool_calls"
+		// The Responses API signals abnormal completion via response.completed
+		// with a status other than "completed" (incomplete/failed/cancelled) - it
+		// does not emit separate events for those cases. Map the status onto the
+		// Chat Completions finish_reason; fall back to the tool_calls/stop
+		// inference only when the status is absent or plain "completed".
+		finishReason := ""
+		if streamEvent.Response != nil && streamEvent.Response.Status != nil {
+			switch *streamEvent.Response.Status {
+			case "incomplete":
+				// Distinguish truncation from content-filter rejection via the
+				// incomplete details the upstream attached to the response.
+				reason := ""
+				if streamEvent.Response.IncompleteDetails != nil {
+					reason = streamEvent.Response.IncompleteDetails.Reason
+				}
+				switch reason {
+				case "content_filter":
+					finishReason = "content_filter"
+				default:
+					finishReason = "length"
+				}
+			case "failed":
+				finishReason = "error"
+			case "cancelled", "canceled":
+				finishReason = "cancelled"
+			}
+		}
+		if finishReason == "" {
+			if len(s.state.toolCalls) > 0 {
+				finishReason = "tool_calls"
+			} else {
+				finishReason = "stop"
+			}
 		}
 
 		// First event: finish_reason with empty delta
