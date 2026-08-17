@@ -208,24 +208,11 @@ type ChannelSettings struct {
 	// trigger retry for this channel. When Regex is false, Pattern is matched as a
 	// case-sensitive substring of the error text.
 	RetryableErrorPatterns []RetryableErrorPattern `json:"retryableErrorPatterns,omitempty"`
-
-	// ProviderQuota stores provider-specific credentials used only for quota
-	// polling. Keep upstream request credentials in ChannelCredentials.
-	ProviderQuota *ChannelProviderQuotaSettings `json:"providerQuota,omitempty"`
 }
 
 type RetryableErrorPattern struct {
 	Pattern string `json:"pattern"`
 	Regex   bool   `json:"regex,omitempty"`
-}
-
-type ChannelProviderQuotaSettings struct {
-	OpencodeGo *OpenCodeGoQuotaSettings `json:"opencodeGo,omitempty"`
-}
-
-type OpenCodeGoQuotaSettings struct {
-	WorkspaceID string `json:"workspaceId,omitempty"`
-	AuthCookie  string `json:"authCookie,omitempty"`
 }
 
 type ChannelRateLimit struct {
@@ -379,6 +366,16 @@ func (c *ChannelCredentials) IsOAuth() bool {
 
 	// Backward compatibility: check if APIKey contains OAuth JSON
 	return isOAuthJSON(c.APIKey)
+}
+
+func (c *ChannelCredentials) ResolveOAuthCredentials() (*OAuthCredentials, error) {
+	if c != nil && c.OAuth != nil && strings.TrimSpace(c.OAuth.AccessToken) != "" {
+		return c.OAuth, nil
+	}
+	if c == nil {
+		return oauth.ParseCredentialsJSON("")
+	}
+	return oauth.ParseCredentialsJSON(c.APIKey)
 }
 
 // isOAuthJSON checks if a string is an OAuth JSON credential.

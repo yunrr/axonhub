@@ -88,6 +88,8 @@ export const channelTypeSchema = z.enum([
   'xiaomi',
   'xiaomi_anthropic',
   'xai',
+  'xai_responses',
+  'xai_subscription',
   'ppio',
   'siliconflow',
   'volcengine',
@@ -273,17 +275,6 @@ export const retryableErrorPatternSchema = z.object({
 });
 export type RetryableErrorPattern = z.infer<typeof retryableErrorPatternSchema>;
 
-export const openCodeGoQuotaSettingsSchema = z.object({
-  workspaceId: z.string().optional().nullable(),
-  authCookie: z.string().optional().nullable(),
-});
-export type OpenCodeGoQuotaSettings = z.infer<typeof openCodeGoQuotaSettingsSchema>;
-
-export const channelProviderQuotaSettingsSchema = z.object({
-  opencodeGo: openCodeGoQuotaSettingsSchema.optional().nullable(),
-});
-export type ChannelProviderQuotaSettings = z.infer<typeof channelProviderQuotaSettingsSchema>;
-
 // Channel Settings
 export const channelSettingsSchema = z.object({
   extraModelPrefix: z.string().optional(),
@@ -301,7 +292,6 @@ export const channelSettingsSchema = z.object({
   rateLimit: channelRateLimitSchema.optional().nullable(),
   retryableStatusCodes: z.array(z.number().int().min(400).max(599)).optional().nullable(),
   retryableErrorPatterns: z.array(retryableErrorPatternSchema).optional().nullable(),
-  providerQuota: channelProviderQuotaSettingsSchema.optional().nullable(),
 });
 
 export type ChannelSettings = z.infer<typeof channelSettingsSchema>;
@@ -509,12 +499,14 @@ export type SaveChannelModelPriceInput = z.infer<typeof saveChannelModelPriceInp
 function validateOAuthCredentials(type: string, apiKey: string | undefined, ctx: z.RefinementCtx) {
   if (!apiKey) return;
 
-  // For GitHub Copilot, enforce JSON format
   const isCopilot = type === 'github_copilot';
-  if (isCopilot && !apiKey.trim().startsWith('{')) {
+  const requiresJSON = isCopilot || type === 'xai_subscription';
+  if (requiresJSON && !apiKey.trim().startsWith('{')) {
     ctx.addIssue({
       code: 'custom' as const,
-      message: 'channels.dialogs.oauth.errors.copilotCredentialsInvalid',
+      message: isCopilot
+        ? 'channels.dialogs.oauth.errors.copilotCredentialsInvalid'
+        : 'channels.dialogs.oauth.errors.credentialsInvalid',
       path: ['credentials', 'apiKey'],
     });
     return;
@@ -584,7 +576,11 @@ export const createChannelInputSchema = z
   })
   .superRefine((data, ctx) => {
     const isOAuthType =
-      data.type === 'codex' || data.type === 'claudecode' || data.type === 'antigravity' || data.type === 'github_copilot';
+      data.type === 'codex' ||
+      data.type === 'claudecode' ||
+      data.type === 'antigravity' ||
+      data.type === 'github_copilot' ||
+      data.type === 'xai_subscription';
     const hasApiKey = data.credentials.apiKey && data.credentials.apiKey.trim().length > 0;
 
     // github_copilot requires credentials.apiKey (OAuth JSON with access_token)
@@ -669,7 +665,11 @@ export const updateChannelInputSchema = z
     // For OAuth validation on updates: validate if type is OAuth, or if credentials.apiKey is provided
     // (which indicates OAuth credentials are being set)
     const isOAuthType =
-      effectiveType === 'codex' || effectiveType === 'claudecode' || effectiveType === 'antigravity' || effectiveType === 'github_copilot';
+      effectiveType === 'codex' ||
+      effectiveType === 'claudecode' ||
+      effectiveType === 'antigravity' ||
+      effectiveType === 'github_copilot' ||
+      effectiveType === 'xai_subscription';
 
     // Derive type from parent context if not available
     let derivedType = effectiveType;

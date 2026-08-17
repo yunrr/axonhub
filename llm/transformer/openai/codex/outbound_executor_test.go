@@ -72,6 +72,43 @@ func TestCodexOutbound_StreamAcceptHeader(t *testing.T) {
 	assert.Equal(t, "Bearer "+accessToken, headers.Get("Authorization"))
 }
 
+func TestCodexOutbound_RejectsPassThroughBodyWithTokenLimitFields(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "max_output_tokens", body: `{"model":"gpt-5.4-mini","input":"hi","stream":true,"max_output_tokens":12000}`},
+		{name: "max_completion_tokens", body: `{"model":"gpt-5.4-mini","input":"hi","stream":true,"max_completion_tokens":12000}`},
+		{name: "max_tokens", body: `{"model":"gpt-5.4-mini","input":"hi","stream":true,"max_tokens":12000}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			outbound := &OutboundTransformer{}
+			llmReq := &llm.Request{
+				APIFormat: llm.APIFormatOpenAIResponse,
+				RawRequest: &httpclient.Request{
+					Body: []byte(tt.body),
+				},
+			}
+
+			require.False(t, outbound.AllowPassThroughBody(context.Background(), llmReq, &httpclient.Request{}))
+		})
+	}
+}
+
+func TestCodexOutbound_AllowsPassThroughBodyWithoutTokenLimitFields(t *testing.T) {
+	outbound := &OutboundTransformer{}
+	llmReq := &llm.Request{
+		APIFormat: llm.APIFormatOpenAIResponse,
+		RawRequest: &httpclient.Request{
+			Body: []byte(`{"model":"gpt-5.4-mini","input":"hi","stream":true}`),
+		},
+	}
+
+	require.True(t, outbound.AllowPassThroughBody(context.Background(), llmReq, &httpclient.Request{}))
+}
+
 func TestCodexOutbound_StreamAllowsDownstreamIdentityOverrides(t *testing.T) {
 	ctx := context.Background()
 	accessToken := testAccessTokenWithAccountID(t)
@@ -482,7 +519,71 @@ func TestCodexOutbound_AppliesReasoningDefaultsWhenMissing(t *testing.T) {
 	assert.Equal(t, true, body["parallel_tool_calls"])
 	assert.Equal(t, []any{"reasoning.encrypted_content"}, body["include"])
 	assert.Equal(t, "auto", reasoning["summary"])
+	assert.Equal(t, "all_turns", reasoning["context"])
 	assert.NotContains(t, body, "metadata")
+}
+
+func TestCodexOutbound_FillsMissingReasoningContextForResponsesLite(t *testing.T) {
+	ctx := context.Background()
+	outbound := newTestCodexOutbound(t)
+
+	t.Run("plain chat request gets all_turns context", func(t *testing.T) {
+		hreq, err := outbound.TransformRequest(ctx, &llm.Request{
+			Model: "gpt-5-codex",
+			Messages: []llm.Message{{
+				Role:    "user",
+				Content: llm.MessageContent{Content: lo.ToPtr("Hello")},
+			}},
+			Stream: lo.ToPtr(true),
+		})
+		require.NoError(t, err)
+
+		body := decodeCodexRequestBody(t, hreq)
+		reasoning, ok := body["reasoning"].(map[string]any)
+		require.True(t, ok, "reasoning block must be emitted for Responses Lite")
+		assert.Equal(t, "all_turns", reasoning["context"])
+	})
+
+	t.Run("client-sent reasoning without context gets all_turns", func(t *testing.T) {
+		headers := make(http.Header)
+		headers.Set("Content-Type", "application/json")
+		headers.Set(responses.ResponsesLiteHeader, "true")
+		inboundRequest := &httpclient.Request{
+			Headers: headers,
+			Body: []byte(`{
+				"model": "gpt-5.6-sol",
+				"input": "Hello",
+				"stream": true,
+				"reasoning": {"effort": "xhigh"}
+			}`),
+		}
+
+		llmRequest, err := responses.NewInboundTransformer().TransformRequest(ctx, inboundRequest)
+		require.NoError(t, err)
+		llmRequest.RawRequest = inboundRequest
+
+		outboundRequest, err := outbound.TransformRequest(ctx, llmRequest)
+		require.NoError(t, err)
+
+		body := decodeCodexRequestBody(t, outboundRequest)
+		reasoning, ok := body["reasoning"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "all_turns", reasoning["context"])
+		assert.Equal(t, "xhigh", reasoning["effort"])
+	})
+
+	t.Run("image requests do not get a fabricated reasoning context", func(t *testing.T) {
+		req, err := outbound.TransformRequest(ctx, &llm.Request{
+			Model:       "gpt-image-2",
+			RequestType: llm.RequestTypeImage,
+			APIFormat:   llm.APIFormatOpenAIImageGeneration,
+			RawRequest:  &httpclient.Request{Headers: http.Header{}},
+			Image:       &llm.ImageRequest{Prompt: "a cat"},
+		})
+		require.NoError(t, err)
+
+		assert.NotContains(t, string(req.Body), `"context"`)
+	})
 }
 
 func TestCodexOutbound_ForcesArrayInputsForSingleMessage(t *testing.T) {

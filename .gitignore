@@ -172,3 +172,5 @@ config.schema.json
 .ace-tool/
 .context/
 .codegraph/
+.omx/
+deploy_dev.sh
