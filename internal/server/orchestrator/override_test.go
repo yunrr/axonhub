@@ -284,11 +284,27 @@ func TestOverrideConditionContainsTemplate(t *testing.T) {
 	require.False(t, evaluateCondition(ctx, condition, RenderContext{Model: "gpt-4.1"}))
 }
 
+func TestOverrideConditionLowerContainsTemplate(t *testing.T) {
+	ctx := context.Background()
+	condition := `{{if contains (lower .Model) "mimo"}}true{{end}}`
+
+	require.True(t, evaluateCondition(ctx, condition, RenderContext{Model: "MiMo-2"}))
+	require.False(t, evaluateCondition(ctx, condition, RenderContext{Model: "gpt-4.1"}))
+}
+
 func TestOverrideConditionMatchTemplate(t *testing.T) {
 	ctx := context.Background()
 	condition := `{{if match .Model "(?i)grok"}}true{{end}}`
 
 	require.True(t, evaluateCondition(ctx, condition, RenderContext{Model: "Grok-3"}))
+	require.False(t, evaluateCondition(ctx, condition, RenderContext{Model: "gpt-4.1"}))
+}
+
+func TestOverrideConditionRegexMatchTemplate(t *testing.T) {
+	ctx := context.Background()
+	condition := `{{if regexMatch "(?i)mimo" .Model}}true{{end}}`
+
+	require.True(t, evaluateCondition(ctx, condition, RenderContext{Model: "MiMo-2"}))
 	require.False(t, evaluateCondition(ctx, condition, RenderContext{Model: "gpt-4.1"}))
 }
 

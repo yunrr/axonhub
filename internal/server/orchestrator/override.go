@@ -39,7 +39,11 @@ type RenderContext struct {
 
 var overrideTemplateFuncs = template.FuncMap{
 	"contains": strings.Contains,
+	"lower":    strings.ToLower,
 	"match": func(value, pattern string) (bool, error) {
+		return regexp.MatchString(pattern, value)
+	},
+	"regexMatch": func(pattern, value string) (bool, error) {
 		return regexp.MatchString(pattern, value)
 	},
 	"toJSON": func(value any) (string, error) {
