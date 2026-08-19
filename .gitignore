@@ -167,5 +167,8 @@ config.schema.json
 .omc/
 .playwright-mcp/
 .ace-tool/
+.context/
+.codegraph/
+axonhub.exe
 .omx/
 deploy_dev.sh

@@ -3,12 +3,17 @@ package datamigrate_test
 import (
 	"context"
 	"database/sql"
+	sqldriver "database/sql/driver"
+	"errors"
+	"fmt"
 	"testing"
 
+	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/stretchr/testify/require"
 
 	"github.com/looplj/axonhub/internal/authz"
+	"github.com/looplj/axonhub/internal/ent"
 	"github.com/looplj/axonhub/internal/ent/channel"
 	"github.com/looplj/axonhub/internal/ent/enttest"
 	"github.com/looplj/axonhub/internal/ent/migrate/datamigrate"
@@ -131,3 +136,147 @@ func TestV1_0_0_Beta9_LeavesUntouchedChannelsAlone(t *testing.T) {
 }
 
 func int64Ptr(v int64) *int64 { return &v }
+
+// dirtyUpdatedAt mimics the corrupted value channel_price.go used to persist:
+// time.Now() (monotonic suffix "m=+..." plus local timezone) serialized by the
+// SQLite driver via time.Time.String().
+const dirtyUpdatedAt = "2026-08-18 00:13:11.396794292 +0800 CST m=+0.000011483"
+
+// cleanedUpdatedAt is dirtyUpdatedAt with the monotonic suffix stripped, i.e.
+// the exact string the driver produces after a scan round-trip. The optimistic
+// lock in UpdateChannel compares against this value via updated_at = ?.
+const cleanedUpdatedAt = "2026-08-18 00:13:11.396794292 +0800 CST"
+
+// updatedAtMatches simulates the optimistic-lock comparison UpdateChannel
+// performs: WHERE updated_at = <snapshot>. Returns how many rows match.
+func updatedAtMatches(t *testing.T, driver *entsql.Driver, id int, updatedAt string) int {
+	t.Helper()
+	var n int
+	require.NoError(t, driver.DB().QueryRowContext(context.Background(),
+		"SELECT count(*) FROM channels WHERE id = ? AND updated_at = ?", id, updatedAt).Scan(&n))
+	return n
+}
+
+func TestV1_0_0_Beta9_StripsMonotonicSuffixFromUpdatedAt(t *testing.T) {
+	client := enttest.NewEntClient(t, "sqlite3", "file:beta9-updated-at?mode=memory&_fk=1")
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(context.Background())
+
+	ch := client.Channel.Create().
+		SetName("dirty-updated-at").
+		SetType(channel.TypeOpenai).
+		SetCredentials(objects.ChannelCredentials{APIKey: "sk-test"}).
+		SetSupportedModels([]string{"test-model"}).
+		SetDefaultTestModel("test-model").
+		SaveX(ctx)
+
+	driver := client.Driver().(*entsql.Driver)
+	_, err := driver.ExecContext(ctx,
+		"UPDATE channels SET updated_at = ? WHERE id = ?", dirtyUpdatedAt, ch.ID)
+	require.NoError(t, err)
+
+	// Before migration the optimistic lock can never match: the stored value
+	// still carries the "m=+..." suffix.
+	require.Equal(t, 0, updatedAtMatches(t, driver, ch.ID, cleanedUpdatedAt))
+
+	require.NoError(t, datamigrate.NewV1_0_0_Beta9().Migrate(ctx, client))
+
+	// After migration the cleaned snapshot matches, so UpdateChannel recovers.
+	require.Equal(t, 1, updatedAtMatches(t, driver, ch.ID, cleanedUpdatedAt))
+	// The raw dirty value is gone.
+	require.Equal(t, 0, updatedAtMatches(t, driver, ch.ID, dirtyUpdatedAt))
+}
+
+func TestV1_0_0_Beta9_PreservesCleanUpdatedAt(t *testing.T) {
+	client := enttest.NewEntClient(t, "sqlite3", "file:beta9-clean-updated-at?mode=memory&_fk=1")
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(context.Background())
+
+	ch := client.Channel.Create().
+		SetName("clean-updated-at").
+		SetType(channel.TypeOpenai).
+		SetCredentials(objects.ChannelCredentials{APIKey: "sk-test"}).
+		SetSupportedModels([]string{"test-model"}).
+		SetDefaultTestModel("test-model").
+		SaveX(ctx)
+
+	clean := "2026-08-18 00:13:11.396794292 +0000 UTC"
+	driver := client.Driver().(*entsql.Driver)
+	_, err := driver.ExecContext(ctx,
+		"UPDATE channels SET updated_at = ? WHERE id = ?", clean, ch.ID)
+	require.NoError(t, err)
+
+	require.NoError(t, datamigrate.NewV1_0_0_Beta9().Migrate(ctx, client))
+
+	// Unaffected rows still satisfy the optimistic lock.
+	require.Equal(t, 1, updatedAtMatches(t, driver, ch.ID, clean))
+}
+
+func TestV1_0_0_Beta9_StripsMonotonicSuffixIsIdempotent(t *testing.T) {
+	client := enttest.NewEntClient(t, "sqlite3", "file:beta9-updated-at-idem?mode=memory&_fk=1")
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(context.Background())
+
+	ch := client.Channel.Create().
+		SetName("dirty-updated-at-idem").
+		SetType(channel.TypeOpenai).
+		SetCredentials(objects.ChannelCredentials{APIKey: "sk-test"}).
+		SetSupportedModels([]string{"test-model"}).
+		SetDefaultTestModel("test-model").
+		SaveX(ctx)
+
+	driver := client.Driver().(*entsql.Driver)
+	_, err := driver.ExecContext(ctx,
+		"UPDATE channels SET updated_at = ? WHERE id = ?", dirtyUpdatedAt, ch.ID)
+	require.NoError(t, err)
+
+	require.NoError(t, datamigrate.NewV1_0_0_Beta9().Migrate(ctx, client))
+	require.Equal(t, 1, updatedAtMatches(t, driver, ch.ID, cleanedUpdatedAt))
+
+	// Running again must not corrupt anything further.
+	require.NoError(t, datamigrate.NewV1_0_0_Beta9().Migrate(ctx, client))
+	require.Equal(t, 1, updatedAtMatches(t, driver, ch.ID, cleanedUpdatedAt))
+	require.Equal(t, 0, updatedAtMatches(t, driver, ch.ID, dirtyUpdatedAt))
+}
+
+type recordingDriver struct {
+	dialect     string
+	execQueries []string
+}
+
+func (d *recordingDriver) Dialect() string { return d.dialect }
+
+func (d *recordingDriver) Close() error { return nil }
+
+func (d *recordingDriver) Tx(context.Context) (dialect.Tx, error) {
+	return nil, errors.New("unexpected tx")
+}
+
+func (d *recordingDriver) Query(context.Context, string, any, any) error {
+	return errors.New("unexpected query")
+}
+
+func (d *recordingDriver) Exec(_ context.Context, query string, _ any, v any) error {
+	d.execQueries = append(d.execQueries, query)
+	result, ok := v.(*sql.Result)
+	if !ok {
+		return fmt.Errorf("expected *sql.Result, got %T", v)
+	}
+	*result = sqldriver.RowsAffected(0)
+	return nil
+}
+
+func TestV1_0_0_Beta9_PostgresSkipsMonotonicUpdatedAtCleanup(t *testing.T) {
+	drv := &recordingDriver{dialect: dialect.Postgres}
+	client := ent.NewClient(ent.Driver(drv))
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(context.Background())
+	require.NoError(t, datamigrate.NewV1_0_0_Beta9().Migrate(ctx, client))
+	require.Equal(t, []string{
+		`UPDATE channels SET settings = settings #- '{providerQuota}' WHERE settings ? 'providerQuota'`,
+	}, drv.execQueries)
+}
