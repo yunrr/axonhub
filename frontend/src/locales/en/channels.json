@@ -229,6 +229,7 @@
   "channels.dialogs.test.title": "Test Channel",
   "channels.dialogs.test.description": "Test {{name}} with selected models",
   "channels.dialogs.test.searchPlaceholder": "Search models...",
+  "channels.dialogs.test.noModels": "No matching models",
   "channels.dialogs.test.modelNameColumn": "Model Name",
   "channels.dialogs.test.statusColumn": "Status",
   "channels.dialogs.test.testAllButton": "Test {{count}} models",

@@ -226,6 +226,7 @@
   "channels.dialogs.test.title": "渠道模型测试",
   "channels.dialogs.test.description": "使用 {{name}} 渠道测试选中的模型",
   "channels.dialogs.test.searchPlaceholder": "搜索模型...",
+  "channels.dialogs.test.noModels": "没有匹配的模型",
   "channels.dialogs.test.modelNameColumn": "模型名称",
   "channels.dialogs.test.statusColumn": "状态",
   "channels.dialogs.test.testAllButton": "批量测试{{count}}个模型",

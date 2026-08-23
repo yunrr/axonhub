@@ -24,7 +24,7 @@ import { TagsAutocompleteInput } from '@/components/ui/tags-autocomplete-input';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { AutoCompleteSelect } from '@/components/auto-complete-select';
-import { SelectDropdown } from '@/components/select-dropdown';
+import { SearchableSelectDropdown, SelectDropdown } from '@/components/select-dropdown';
 import { useProxyPresets, useSaveProxyPreset } from '@/features/system/data/system';
 import { usePermissions } from '@/hooks/usePermissions';
 import { antigravityOAuthExchange, antigravityOAuthStart } from '../data/antigravity';
@@ -2654,11 +2654,13 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
                               {t('channels.dialogs.fields.defaultTestModel.label')}
                             </FormLabel>
                             <div className='space-y-1 md:col-span-6'>
-                              <SelectDropdown
+                              <SearchableSelectDropdown
                                 defaultValue={field.value}
                                 onValueChange={field.onChange}
                                 items={supportedModels.map((model) => ({ value: model, label: model }))}
                                 placeholder={t('channels.dialogs.fields.defaultTestModel.description')}
+                                searchPlaceholder={t('channels.dialogs.test.searchPlaceholder')}
+                                emptyMessage={t('channels.dialogs.test.noModels')}
                                 className='md:col-span-6'
                                 disabled={supportedModels.length === 0}
                                 isControlled={true}

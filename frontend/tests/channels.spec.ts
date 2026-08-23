@@ -215,12 +215,20 @@ test.describe('Admin Channels Management', () => {
     const modelBadge = createDialog.getByTestId('quick-model-gpt-5.2')
     await expect(modelBadge).toBeVisible({ timeout: 5000 })
     await modelBadge.click()
+    const codexModelBadge = createDialog.getByTestId('quick-model-gpt-5.2-codex')
+    await expect(codexModelBadge).toBeVisible({ timeout: 5000 })
+    await codexModelBadge.click()
     await createDialog.getByTestId('add-selected-models-button').click()
 
     const defaultTestModelSelect = createDialog.getByTestId('default-test-model-select')
     await expect(defaultTestModelSelect).toBeVisible({ timeout: 5000 })
     await defaultTestModelSelect.click()
-    await page.getByRole('option', { name: 'gpt-5.2' }).click()
+    const modelSearchInput = page.getByPlaceholder(/Search models|搜索模型/i)
+    await expect(modelSearchInput).toBeVisible()
+    await modelSearchInput.fill('codex')
+    await expect(page.getByRole('option', { name: 'gpt-5.2-codex', exact: true })).toBeVisible()
+    await expect(page.getByRole('option', { name: 'gpt-5.2', exact: true })).toBeHidden()
+    await page.getByRole('option', { name: 'gpt-5.2-codex', exact: true }).click()
 
     const createRequest = page.waitForRequest((request) => {
       if (!request.url().includes('/admin/graphql') || request.method() !== 'POST') return false
@@ -233,8 +241,9 @@ test.describe('Admin Channels Management', () => {
       createDialog.getByTestId('channel-submit-button').click(),
     ])
 
-    const payload = (await createRequest).postDataJSON() as { variables: { input: { baseURL: string } } }
+    const payload = (await createRequest).postDataJSON() as { variables: { input: { baseURL: string; defaultTestModel: string } } }
     expect(payload.variables.input.baseURL).toBe(baseURL)
+    expect(payload.variables.input.defaultTestModel).toBe('gpt-5.2-codex')
   })
 
   test('can test a channel', async ({ page }) => {
