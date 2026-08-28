@@ -266,7 +266,8 @@ type DeleteDisabledAPIKeysResult struct {
 }
 
 // DeleteDisabledAPIKeys removes disabled API keys from both disabled_api_keys list and credentials.
-// It ensures at least one API key remains and prevents deletion for OAuth channels.
+// It ensures at least one API key remains. OAuth channels can delete named
+// credential entries; a legacy single-OAuth channel keeps its one credential.
 func (svc *ChannelService) DeleteDisabledAPIKeys(ctx context.Context, channelID int, keys []string) (*DeleteDisabledAPIKeysResult, error) {
 	if len(keys) == 0 {
 		return &DeleteDisabledAPIKeysResult{Success: true}, nil
@@ -278,11 +279,6 @@ func (svc *ChannelService) DeleteDisabledAPIKeys(ctx context.Context, channelID 
 	ch, err := svc.entFromContext(ctx).Channel.Get(ctx, channelID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get channel: %w", err)
-	}
-
-	// Check if channel uses OAuth - cannot delete keys for OAuth channels
-	if ch.Credentials.IsOAuth() {
-		return nil, fmt.Errorf("cannot delete API keys for OAuth channels")
 	}
 
 	keysToDelete := make(map[string]struct{}, len(keys))
@@ -298,32 +294,50 @@ func (svc *ChannelService) DeleteDisabledAPIKeys(ctx context.Context, channelID 
 		}
 	}
 
-	// Remove from credentials
 	newCredentials := ch.Credentials
-	if len(newCredentials.APIKeys) > 0 {
-		filteredKeys := make([]string, 0, len(newCredentials.APIKeys))
-		for _, k := range newCredentials.APIKeys {
-			if _, found := keysToDelete[k]; !found {
-				filteredKeys = append(filteredKeys, k)
+
+	if ch.Credentials.IsOAuth() {
+		newCredentials = deleteOAuthCredentialEntries(newCredentials, keysToDelete)
+	} else {
+		// Remove from credentials
+		if len(newCredentials.APIKeys) > 0 {
+			filteredKeys := make([]string, 0, len(newCredentials.APIKeys))
+			for _, k := range newCredentials.APIKeys {
+				if _, found := keysToDelete[k]; !found {
+					filteredKeys = append(filteredKeys, k)
+				}
+			}
+
+			newCredentials.APIKeys = filteredKeys
+		}
+
+		if newCredentials.APIKey != "" {
+			if _, found := keysToDelete[newCredentials.APIKey]; found {
+				newCredentials.APIKey = ""
 			}
 		}
-
-		newCredentials.APIKeys = filteredKeys
 	}
 
-	if newCredentials.APIKey != "" {
-		if _, found := keysToDelete[newCredentials.APIKey]; found {
-			newCredentials.APIKey = ""
-		}
-	}
-
-	// Ensure at least one API key remains
-	allKeys := newCredentials.GetAllAPIKeys()
+	// Ensure at least one credential remains. For OAuth channels the preserved
+	// credential stays as an entry; for key channels the first deleted key is
+	// restored. Either way the credential comes back enabled, matching the
+	// historical behaviour for plain API keys — the auto-disable flow
+	// re-disables it explicitly when needed.
+	allKeys := newCredentials.GetAllCredentialRefs()
 	if len(allKeys) == 0 {
-		// Restore at least one key from the keys being deleted
-		// Prefer the first key that was supposed to be deleted
 		restoredKey := keys[0]
-		newCredentials.APIKeys = []string{restoredKey}
+
+		if ch.Credentials.IsOAuth() {
+			entries := ch.Credentials.GetAllOAuthCredentials()
+			for i := range entries {
+				if entries[i].ID == restoredKey {
+					newCredentials.OAuths = []objects.NamedOAuthCredentials{entries[i]}
+					break
+				}
+			}
+		} else {
+			newCredentials.APIKeys = []string{restoredKey}
+		}
 	}
 
 	update := svc.entFromContext(ctx).Channel.UpdateOneID(channelID).
@@ -349,6 +363,32 @@ func (svc *ChannelService) DeleteDisabledAPIKeys(ctx context.Context, channelID 
 	svc.asyncReloadChannels()
 
 	return result, nil
+}
+
+// deleteOAuthCredentialEntries removes the given OAuth credential entries from
+// the credentials. Legacy single-OAuth channels (sentinel ref) carry no
+// entries, so nothing to remove there — the ref simply stays in
+// disabled_api_keys.
+func deleteOAuthCredentialEntries(credentials objects.ChannelCredentials, keysToDelete map[string]struct{}) objects.ChannelCredentials {
+	if len(credentials.OAuths) == 0 {
+		return credentials
+	}
+
+	remaining := make([]objects.NamedOAuthCredentials, 0, len(credentials.OAuths))
+	for _, entry := range credentials.OAuths {
+		if _, found := keysToDelete[entry.ID]; !found {
+			remaining = append(remaining, entry)
+		}
+	}
+
+	credentials.OAuths = remaining
+
+	// The legacy OAuth field mirrors the old single credential; once entries
+	// exist it is dead data, clear it so it cannot resurrect on reads.
+	credentials.OAuth = nil
+	credentials.APIKey = ""
+
+	return credentials
 }
 
 func applyRecoveredChannelStatus(

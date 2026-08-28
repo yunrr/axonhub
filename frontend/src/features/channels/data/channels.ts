@@ -807,6 +807,19 @@ const QUERY_CHANNELS_QUERY = `
           credentials {
             apiKey
             apiKeys
+            oauths {
+              id
+              name
+              projectId
+              credentials {
+                accessToken
+                refreshToken
+                clientID
+                expiresAt
+                tokenType
+                scopes
+              }
+            }
             gcp {
               region
               projectID

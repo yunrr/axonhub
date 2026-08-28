@@ -83,6 +83,11 @@ func (c *GithubCopilotQuotaChecker) CheckQuota(ctx context.Context, ch *ent.Chan
 }
 
 func (c *GithubCopilotQuotaChecker) getAccessToken(ch *ent.Channel) (string, error) {
+	// Named subscription entries carry their own credentials.
+	if creds, err := resolveChannelOAuthCredentials(ch); err == nil && creds != nil && creds.AccessToken != "" {
+		return creds.AccessToken, nil
+	}
+
 	if ch.Credentials.OAuth == nil && strings.TrimSpace(ch.Credentials.APIKey) == "" {
 		return "", fmt.Errorf("channel has no credentials")
 	}

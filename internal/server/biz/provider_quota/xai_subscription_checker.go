@@ -22,7 +22,7 @@ func NewXAISubscriptionQuotaChecker(httpClient *httpclient.HttpClient) *XAISubsc
 }
 
 func (checker *XAISubscriptionQuotaChecker) CheckQuota(ctx context.Context, ch *ent.Channel) (QuotaData, error) {
-	credentials, err := ch.Credentials.ResolveOAuthCredentials()
+	credentials, err := resolveChannelOAuthCredentials(ch)
 	if err != nil {
 		return QuotaData{}, fmt.Errorf("parse xAI subscription credentials: %w", err)
 	}

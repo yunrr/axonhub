@@ -237,6 +237,7 @@ type ChannelCredentials {
   apiKeys: [String!]
   gcp: GCPCredential
   oauth: OAuthCredentials
+  oauths: [NamedOAuthCredentials!]
 }
 
 type DisabledAPIKey {
@@ -256,6 +257,13 @@ type OAuthCredentials {
   scopes: [String!]
 }
 
+type NamedOAuthCredentials {
+  id: String!
+  name: String
+  projectId: String
+  credentials: OAuthCredentials
+}
+
 type GCPCredential {
   region: String!
   projectID: String!
@@ -267,6 +275,7 @@ input ChannelCredentialsInput {
   apiKeys: [String!]
   gcp: GCPCredentialInput
   oauth: OAuthCredentialsInput
+  oauths: [NamedOAuthCredentialsInput!]
 }
 
 input OAuthCredentialsInput {
@@ -276,6 +285,13 @@ input OAuthCredentialsInput {
   expiresAt: Time
   tokenType: String
   scopes: [String!]
+}
+
+input NamedOAuthCredentialsInput {
+  id: String!
+  name: String
+  projectId: String
+  credentials: OAuthCredentialsInput
 }
 
 input GCPCredentialInput {

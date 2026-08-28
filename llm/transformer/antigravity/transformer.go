@@ -39,6 +39,22 @@ func WithOnTokenRefreshed(onRefreshed func(ctx context.Context, refreshed *oauth
 	}
 }
 
+// RequestCredentialSource supplies per-request OAuth credentials together with
+// the Google Cloud project ID associated with them. It enables multi-credential
+// rotation: the gateway picks one credential per request and the envelope is
+// stamped with that credential's project.
+type RequestCredentialSource interface {
+	GetForRequest(ctx context.Context) (creds *oauth.OAuthCredentials, projectID string, err error)
+}
+
+// WithCredentialSource sets a rotating credential source. When set it takes
+// precedence over the single-credential token provider built from Config.APIKey.
+func WithCredentialSource(source RequestCredentialSource) Option {
+	return func(t *Transformer) {
+		t.credentialSource = source
+	}
+}
+
 // GetTokenProvider returns the OAuth token provider.
 func (t *Transformer) GetTokenProvider() *oauth.TokenProvider {
 	return t.tokenProvider
@@ -56,6 +72,7 @@ type Transformer struct {
 	config            Config
 	geminiTransformer transformer.Outbound
 	tokenProvider     *oauth.TokenProvider
+	credentialSource  RequestCredentialSource
 	httpClient        *httpclient.HttpClient
 	onTokenRefreshed  func(ctx context.Context, refreshed *oauth.OAuthCredentials) error
 }
@@ -186,8 +203,45 @@ func (t *Transformer) TransformRequest(ctx context.Context, llmReq *llm.Request)
 	// Store the original model name in metadata for the executor to use for routing
 	transformedModel := transformModelForAntigravity(llmReq.Model)
 
+	// Resolve the credentials for this request. A rotating credential source picks
+	// one imported subscription and its project; otherwise fall back to the
+	// single-credential token provider.
+	var (
+		authConfig *httpclient.AuthConfig
+		project    = t.config.Project
+	)
+
+	switch {
+	case t.credentialSource != nil:
+		creds, projectID, err := t.credentialSource.GetForRequest(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get OAuth token: %w", err)
+		}
+
+		if projectID != "" {
+			project = projectID
+		}
+
+		authConfig = &httpclient.AuthConfig{
+			Type:   httpclient.AuthTypeBearer,
+			APIKey: creds.AccessToken,
+		}
+	case t.tokenProvider != nil:
+		creds, err := t.tokenProvider.Get(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get OAuth token: %w", err)
+		}
+
+		authConfig = &httpclient.AuthConfig{
+			Type:   httpclient.AuthTypeBearer,
+			APIKey: creds.AccessToken,
+		}
+	default:
+		return nil, fmt.Errorf("no OAuth token provider configured")
+	}
+
 	// 5. Wrap in Antigravity Envelope
-	envelope := NewAntigravityEnvelope(t.config.Project, transformedModel, geminiReq)
+	envelope := NewAntigravityEnvelope(project, transformedModel, geminiReq)
 
 	body, err := json.Marshal(envelope)
 	if err != nil {
@@ -210,22 +264,7 @@ func (t *Transformer) TransformRequest(ctx context.Context, llmReq *llm.Request)
 		headers.Set("Accept", "application/json")
 	}
 
-	// Auth - OAuth only, no API key fallback
-	var authConfig *httpclient.AuthConfig
-
-	if t.tokenProvider != nil {
-		creds, err := t.tokenProvider.Get(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get OAuth token: %w", err)
-		}
-
-		authConfig = &httpclient.AuthConfig{
-			Type:   httpclient.AuthTypeBearer,
-			APIKey: creds.AccessToken,
-		}
-	} else {
-		return nil, fmt.Errorf("no OAuth token provider configured")
-	}
+	// Auth - OAuth only, no API key fallback; authConfig was resolved above.
 
 	// URL
 	url := t.buildURL(llmReq)

@@ -77,6 +77,10 @@ type Channel struct {
 	// cachedEnabledAPIKeys caches enabled API keys (computed once when channel is loaded)
 	cachedEnabledAPIKeys []string
 
+	// cachedEnabledCredentialRefs caches enabled credential refs, including the
+	// named OAuth credential entries of OAuth channels (computed once on load).
+	cachedEnabledCredentialRefs []string
+
 	// cachedDisabledKeySet caches disabled key lookup set for O(1) check
 	cachedDisabledKeySet map[string]struct{}
 

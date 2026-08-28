@@ -59,6 +59,7 @@ import {
   getChannelTypeForApiFormat,
 } from '../data/config_providers';
 import { Channel, ChannelType, ApiFormat, RetryableErrorPattern, createChannelInputSchema, updateChannelInputSchema } from '../data/schema';
+import { buildLegacyOAuthEntry, credentialTokenOf, parseOAuthCredentialText } from '../data/oauth-entries';
 import { ProxyConfig, useOAuthFlow } from '../hooks/use-oauth-flow';
 import { mergeChannelSettingsForUpdate } from '../utils/merge';
 import { isValidModelPattern, matchesModelPattern } from '../utils/pattern';
@@ -419,14 +420,15 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
     }
   };
 
-  // OAuth flows using the reusable hook
-  // OAuth credentials are stored in apiKey field as JSON string, not in apiKeys array
+  // OAuth flows using the reusable hook.
+  // 每次授权 / auth.json 导入成功都会往 credentials.oauths 追加一个订阅条目，
+  // 同一渠道可连续导入多个账号，保存后按 API Key 逻辑轮询，并在「密钥管理」中管理。
   const codexOAuth = useOAuthFlow({
     startFn: codexOAuthStart,
     exchangeFn: codexOAuthExchange,
     proxyConfig,
     onSuccess: (credentials) => {
-      form.setValue('credentials.apiKey', credentials);
+      appendOAuthSubscription(credentials);
     },
   });
 
@@ -435,7 +437,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
     exchangeFn: claudecodeOAuthExchange,
     proxyConfig,
     onSuccess: (credentials) => {
-      form.setValue('credentials.apiKey', credentials);
+      appendOAuthSubscription(credentials);
     },
   });
 
@@ -444,7 +446,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
     exchangeFn: xaiOAuthExchange,
     proxyConfig,
     onSuccess: (credentials) => {
-      form.setValue('credentials.apiKey', credentials);
+      appendOAuthSubscription(credentials);
     },
   });
 
@@ -453,7 +455,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
     exchangeFn: antigravityOAuthExchange,
     proxyConfig,
     onSuccess: (credentials) => {
-      form.setValue('credentials.apiKey', credentials);
+      appendOAuthSubscription(credentials);
     },
   });
 
@@ -688,6 +690,8 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
               // OAuth 类型的凭据存储在 apiKey 字段，不放入 apiKeys
               apiKey: currentRow.credentials?.apiKey || undefined,
               apiKeys: currentRow.credentials?.apiKeys || [],
+              // oauths 是导入的官方订阅条目，编辑时原样透传以避免被整体覆盖
+              oauths: currentRow.credentials?.oauths || undefined,
               gcp: {
                 region: currentRow.credentials?.gcp?.region || '',
                 projectID: currentRow.credentials?.gcp?.projectID || '',
@@ -713,6 +717,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
                 // OAuth 类型的凭据存储在 apiKey 字段，不放入 apiKeys
                 apiKey: duplicateFromRow.credentials?.apiKey || undefined,
                 apiKeys: duplicateFromRow.credentials?.apiKeys || [],
+                oauths: duplicateFromRow.credentials?.oauths || undefined,
                 gcp: {
                   region: duplicateFromRow.credentials?.gcp?.region || '',
                   projectID: duplicateFromRow.credentials?.gcp?.projectID || '',
@@ -744,6 +749,79 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
   const apiKeys = form.watch('credentials.apiKeys');
   const apiKeysCount = useMemo(() => (apiKeys || []).filter((k) => k.trim().length > 0).length, [apiKeys]);
   const isSubmitting = createChannel.isPending || duplicateChannel.isPending || updateChannel.isPending;
+
+  // OAuth 订阅追加：授权 / auth.json 成功后写入 credentials.oauths，可连续导入多个账号。
+  // 注意：useOAuthFlow 的 onSuccess 回调运行时本闭包已完成初始化，此处引用顺序是安全的。
+  const appendOAuthSubscription = useCallback(
+    (rawCredentials: string): boolean => {
+      const parsed = parseOAuthCredentialText(rawCredentials);
+      if ('error' in parsed) {
+        toast.error(t('channels.dialogs.oauth.errors.credentialsInvalid'));
+        return false;
+      }
+
+      const existing = form.getValues('credentials.oauths') ?? [];
+      // 首次追加时，把旧版存在 apiKey 字段里的单订阅迁移为条目（沿用哨兵 ref）
+      const legacy = existing.length > 0 ? undefined : buildLegacyOAuthEntry(form.getValues('credentials.apiKey'));
+      const base = legacy ? [...existing, legacy] : existing;
+
+      if (base.some((entry) => credentialTokenOf(entry) === credentialTokenOf(parsed.entry))) {
+        toast.info(t('channels.dialogs.oauth.subscriptionDuplicate'));
+        return true;
+      }
+
+      form.setValue('credentials.oauths', [...base, parsed.entry], { shouldDirty: true, shouldValidate: true });
+      // 旧订阅已迁移为条目后，apiKey 字段不再使用，清空完成布局迁移
+      if (legacy) {
+        form.setValue('credentials.apiKey', undefined, { shouldDirty: true });
+      }
+      form.clearErrors('credentials.apiKey');
+      toast.success(t('channels.dialogs.oauth.subscriptionAdded'));
+      return true;
+    },
+    [form, t]
+  );
+
+  const removeOAuthSubscription = useCallback(
+    (id: string) => {
+      const existing = form.getValues('credentials.oauths') ?? [];
+      form.setValue(
+        'credentials.oauths',
+        existing.filter((entry) => entry.id !== id),
+        { shouldDirty: true, shouldValidate: true }
+      );
+    },
+    [form]
+  );
+
+  const oauthSubscriptions = form.watch('credentials.oauths');
+
+  const renderOAuthSubscriptionList = () => {
+    if (!oauthSubscriptions || oauthSubscriptions.length === 0) {
+      return null;
+    }
+    return (
+      <div className='mt-3 space-y-1.5'>
+        <p className='text-sm font-medium'>{t('channels.dialogs.oauth.subscriptionsTitle', { count: oauthSubscriptions.length })}</p>
+        <div className='flex flex-wrap gap-1.5'>
+          {oauthSubscriptions.map((entry) => (
+            <Badge key={entry.id} variant='secondary' className='gap-1 pr-1'>
+              <span className='max-w-48 truncate'>{entry.name || `${entry.id}…`.slice(0, 16)}</span>
+              <button
+                type='button'
+                aria-label={t('common.buttons.delete')}
+                className='hover:bg-muted rounded-full p-0.5'
+                onClick={() => removeOAuthSubscription(entry.id)}
+              >
+                <X className='h-3 w-3' />
+              </button>
+            </Badge>
+          ))}
+        </div>
+        <p className='text-muted-foreground text-xs'>{t('channels.dialogs.oauth.subscriptionsHint')}</p>
+      </div>
+    );
+  };
 
   const { data: disabledKeys = [], isFetching: isFetchingDisabledKeys } = useChannelDisabledAPIKeys(currentRow?.id || '', {
     enabled: isEdit && !!currentRow?.id && showApiKeysPanel,
@@ -1134,6 +1212,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
     (oauth: ReturnType<typeof useOAuthFlow>, description: string) => (
       <div className='mt-3 space-y-2'>
         <div className='rounded-md border p-3'>
+          {renderOAuthSubscriptionList()}
           <div className='flex flex-wrap items-center gap-2'>
             <Button type='button' variant='secondary' onClick={oauth.start} disabled={oauth.isStarting}>
               {oauth.isStarting ? t('channels.dialogs.oauth.buttons.starting') : t('channels.dialogs.oauth.buttons.startOAuth')}
@@ -1177,7 +1256,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
         </div>
       </div>
     ),
-    [t]
+    [renderOAuthSubscriptionList, t]
   );
 
   const applyXAISSO = useCallback(async () => {
@@ -1193,11 +1272,9 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
         sso_token: token,
         ...(proxyConfig ? { proxy: proxyConfig } : {}),
       });
-      form.setValue('credentials.apiKey', result.credentials, {
-        shouldDirty: true,
-        shouldTouch: true,
-        shouldValidate: true,
-      });
+      if (!appendOAuthSubscription(result.credentials)) {
+        return;
+      }
       setXaiSSOToken('');
       toast.success(t('channels.dialogs.xaiSso.messages.imported'));
     } catch (error) {
@@ -1205,21 +1282,20 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
     } finally {
       setIsImportingXAISSO(false);
     }
-  }, [form, proxyConfig, t, xaiSSOToken]);
+  }, [appendOAuthSubscription, form, proxyConfig, t, xaiSSOToken]);
 
   const applyCodexAuthJSON = useCallback(async () => {
     try {
       const result = await codexDecodeAuthJSON({ auth_json: codexAuthJSONText });
-      form.setValue('credentials.apiKey', result.credentials, {
-        shouldDirty: true,
-        shouldTouch: true,
-        shouldValidate: true,
-      });
+      if (!appendOAuthSubscription(result.credentials)) {
+        return;
+      }
+      setCodexAuthJSONText('');
       toast.success(t('channels.dialogs.codexAuthJson.messages.applied'));
     } catch {
       toast.error(t('channels.dialogs.codexAuthJson.messages.invalid'));
     }
-  }, [codexAuthJSONText, form, t]);
+  }, [appendOAuthSubscription, codexAuthJSONText, t]);
 
   const onSubmit = async (values: z.infer<typeof formSchema>) => {
     // Check if there are selected fetched models that haven't been confirmed
@@ -1299,6 +1375,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
         const hasApiKey = apiKey.trim().length > 0;
         const apiKeys = values.credentials?.apiKeys || [];
         const hasApiKeys = apiKeys.length > 0 && apiKeys.some((k) => k.trim() !== '');
+        const hasOauths = (values.credentials?.oauths?.length ?? 0) > 0;
         const hasGcpCredentials =
           values.credentials?.gcp?.region &&
           values.credentials.gcp.region.trim() !== '' &&
@@ -1307,7 +1384,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
           values.credentials?.gcp?.jsonData &&
           values.credentials.gcp.jsonData.trim() !== '';
 
-        if (!hasApiKey && !hasApiKeys && !hasGcpCredentials) {
+        if (!hasApiKey && !hasApiKeys && !hasGcpCredentials && !hasOauths) {
           delete updateInput.credentials;
         }
 
@@ -1946,6 +2023,8 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
 
                             <div className='mt-3 space-y-2'>
                               <div className='rounded-md border p-3'>
+                                {renderOAuthSubscriptionList()}
+
                                 <div className='flex flex-wrap items-center gap-2'>
                                   <Button
                                     type='button'
@@ -2017,15 +2096,18 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
                         <div className='grid grid-cols-1 items-start gap-x-6 gap-y-2 md:grid-cols-8'>
                           <div className='col-span-2' />
                           <div className='space-y-4 md:col-span-6'>
+                            {renderOAuthSubscriptionList()}
                             <CopilotDeviceFlow
-                              existingCredentials={form.watch('credentials.apiKey')}
+                              existingCredentials={
+                                form.watch('credentials.apiKey') || (form.watch('credentials.oauths')?.length ? '{}' : '')
+                              }
                               onSuccess={(token) => {
                                 // Store as OAuth JSON format expected by backend
                                 const oauthCredentials = JSON.stringify({
                                   access_token: token,
                                   token_type: 'bearer',
                                 });
-                                form.setValue('credentials.apiKey', oauthCredentials, { shouldDirty: true, shouldValidate: true });
+                                appendOAuthSubscription(oauthCredentials);
                               }}
                               onError={(error) => {
                                 toast.error(error);

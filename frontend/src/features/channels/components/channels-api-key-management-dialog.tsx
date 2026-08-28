@@ -31,7 +31,8 @@ import {
   useTestChannelAPIKey,
   useUpdateChannel,
 } from '../data/channels';
-import { TestAPIKeyResult } from '../data/schema';
+import { ALWAYS_OAUTH_CHANNEL_TYPES, buildLegacyOAuthEntry, credentialTokenOf, parseOAuthCredentialText } from '../data/oauth-entries';
+import { NamedOAuthCredentials, OAUTH_CREDENTIAL_REF, TestAPIKeyResult } from '../data/schema';
 
 interface ChannelsAPIKeyManagementDialogProps {
   open: boolean;
@@ -48,7 +49,7 @@ function maskAPIKey(key: string) {
 /**
  * 统一密钥管理弹窗：
  * - 始终可从行操作菜单进入（无论 1 个还是多个 key）
- * - 批量导入（多行文本，一行一个）
+ * - 批量导入（多行文本，一行一个）；OAuth 订阅渠道可导入 auth.json / OAuth 凭据 JSON / refreshToken|projectID
  * - 单个/批量：测试、复制、禁用/启用、删除
  * - 密钥状态（正常 / 已禁用 / 测试中 / 测试结果）实时动态更新
  */
@@ -66,6 +67,8 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
   // 本弹窗独立的 key 列表：基于 currentRow 快照初始化，导入/删除后本地更新，
   // 避免依赖不会随 query 刷新而更新的 currentRow 快照。
   const [localKeys, setLocalKeys] = useState<string[]>([]);
+  // OAuth 订阅条目（命名 OAuth 凭据），仅在渠道使用 oauths 存储时有值。
+  const [localEntries, setLocalEntries] = useState<NamedOAuthCredentials[]>([]);
   const abortRef = useRef(false);
 
   const testSingleKey = useTestChannelAPIKey();
@@ -74,7 +77,50 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
   const updateChannel = useUpdateChannel();
   const deleteDisabledAPIKeys = useDeleteDisabledChannelAPIKeys();
 
-  const validKeys = useMemo(() => localKeys.filter((key) => key.trim().length > 0), [localKeys]);
+  const credentials = currentRow?.credentials;
+  const isOAuthChannelType =
+    ALWAYS_OAUTH_CHANNEL_TYPES.includes(currentRow?.type ?? '') ||
+    currentRow?.type === 'codex' ||
+    currentRow?.type === 'claudecode';
+  const legacyOAuthCreds =
+    !!credentials?.apiKey?.trim() &&
+    (credentials.apiKey.includes('access_token') || (!credentials.apiKey.trim().startsWith('{') && currentRow?.type === 'antigravity'));
+  // 订阅管理模式：渠道使用 oauths 条目，或仍是旧版单订阅布局（此时显示一行占位）。
+  const isOAuthEntriesChannel = localEntries.length > 0;
+  const isOAuthSubscriptionChannel = isOAuthEntriesChannel || (isOAuthChannelType && legacyOAuthCreds);
+
+  const validKeys = useMemo(() => {
+    if (isOAuthEntriesChannel) {
+      return localEntries.map((entry) => entry.id);
+    }
+    if (isOAuthSubscriptionChannel) {
+      return [OAUTH_CREDENTIAL_REF];
+    }
+    return localKeys.filter((key) => key.trim().length > 0);
+  }, [isOAuthEntriesChannel, isOAuthSubscriptionChannel, localEntries, localKeys]);
+
+  const entryNameByID = useMemo(() => {
+    const map = new Map<string, string>();
+    localEntries.forEach((entry) => {
+      if (entry.name) map.set(entry.id, entry.name);
+    });
+    return map;
+  }, [localEntries]);
+
+  // 旧版单订阅（凭据存在 apiKey 字段）包装成一个条目，id 沿用后端哨兵 ref，
+  // 保证既有禁用记录继续匹配。追加导入时它随整体迁移进 oauths，继续参与轮询。
+  const legacyOAuthEntry = useMemo(
+    () => (localEntries.length > 0 || !currentRow ? undefined : buildLegacyOAuthEntry(credentials?.apiKey)),
+    [currentRow, localEntries.length, credentials?.apiKey]
+  );
+
+  const displayCredential = (key: string) => {
+    if (key === OAUTH_CREDENTIAL_REF) {
+      return t('channels.dialogs.keyManagement.oauthSubscription');
+    }
+    return entryNameByID.get(key) ?? maskAPIKey(key);
+  };
+
   // 服务端实时禁用的 key 集合（所有 disable/enable mutation 都会 invalidate 此 query）
   const { data: disabledKeys = [], isLoading: disabledLoading } = useChannelDisabledAPIKeys(currentRow?.id || '', {
     enabled: open && !!currentRow?.id,
@@ -106,6 +152,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
     if (open) {
       setBulkImportText('');
       setLocalKeys(currentRow?.credentials?.apiKeys ?? []);
+      setLocalEntries(currentRow?.credentials?.oauths ?? []);
       setSelectedKeys(new Set());
       setTestingKey(null);
       setTestResults({});
@@ -138,8 +185,69 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
     setConfirmDeleteSelected(false);
   };
 
+  const credentialToken = credentialTokenOf;
+
+  /** 批量导入订阅：每行一个 auth.json / OAuth 凭据 JSON / refreshToken|projectID。
+   *  旧版单订阅渠道首次导入时，原账号一并迁移为 oauths 条目，继续参与轮询。 */
+  const handleBulkImportOAuthSubscriptions = async () => {
+    const lines = bulkImportText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (lines.length === 0) {
+      return;
+    }
+
+    // 旧版凭据存在但无法解析为条目时拒绝导入：整体覆盖会静默丢弃原账号。
+    if (localEntries.length === 0 && !legacyOAuthEntry && isOAuthSubscriptionChannel) {
+      toast.error(t('channels.dialogs.keyManagement.oauthImportLegacyUnparsed'));
+      return;
+    }
+
+    const baseEntries = localEntries.length > 0 ? localEntries : legacyOAuthEntry ? [legacyOAuthEntry] : [];
+    const seenTokens = new Set(baseEntries.map(credentialToken));
+    const newEntries: NamedOAuthCredentials[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const parsed = parseOAuthCredentialText(lines[i]);
+      if ('error' in parsed) {
+        toast.error(t('channels.dialogs.keyManagement.oauthImportLineError', { line: i + 1 }));
+        return;
+      }
+      const token = credentialToken(parsed.entry);
+      if (seenTokens.has(token)) {
+        continue;
+      }
+      seenTokens.add(token);
+      newEntries.push(parsed.entry);
+    }
+
+    if (newEntries.length === 0) {
+      setBulkImportText('');
+      return;
+    }
+
+    const merged = [...baseEntries, ...newEntries];
+    try {
+      await updateChannel.mutateAsync({
+        id: currentRow.id,
+        input: { credentials: { oauths: merged } },
+      });
+      setLocalEntries(merged);
+      setBulkImportText('');
+      toast.success(t('channels.dialogs.keyManagement.oauthImportSuccess', { count: newEntries.length }));
+    } catch {
+      // handled by hook
+    }
+  };
+
   /** 批量导入：多行文本，一行一个 key，去重、去空白，追加到渠道 apiKeys */
   const handleBulkImport = async () => {
+    if (isOAuthSubscriptionChannel) {
+      await handleBulkImportOAuthSubscriptions();
+      return;
+    }
+
     const newKeys = bulkImportText
       .split('\n')
       .map((k) => k.trim())
@@ -188,6 +296,24 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
     // 注意：remainingKeys 必须同时过滤 active 与 disabled，
     // 避免把上面 deleteDisabledAPIKeys 已从 credentials 移除的 disabled key 写回去。
     const removed = new Set([...active, ...disabled]);
+
+    if (isOAuthEntriesChannel) {
+      const remainingEntries = localEntries.filter((entry) => !removed.has(entry.id));
+      if (active.length > 0) {
+        await updateChannel.mutateAsync({
+          id: currentRow.id,
+          input: { credentials: { oauths: remainingEntries } },
+        });
+      }
+      setLocalEntries(remainingEntries);
+      return;
+    }
+
+    if (isOAuthSubscriptionChannel) {
+      // 旧版单订阅布局只有一行且不可删除（isLastKey 已拦截），这里无需处理。
+      return;
+    }
+
     const remainingKeys = validKeys.filter((key) => !removed.has(key));
     if (active.length > 0) {
       await updateChannel.mutateAsync({
@@ -240,7 +366,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
       if (!abortRef.current) {
         setTestResults((prev) => ({
           ...prev,
-          [key]: { keyPrefix: maskAPIKey(key), success: false, latency: 0, error: t('channels.dialogs.testAPIKeys.requestFailed'), disabled: false },
+          [key]: { keyPrefix: displayCredential(key), success: false, latency: 0, error: t('channels.dialogs.testAPIKeys.requestFailed'), disabled: false },
         }));
       }
     } finally {
@@ -275,7 +401,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
         if (!abortRef.current) {
           setTestResults((prev) => ({
             ...prev,
-            [key]: { keyPrefix: maskAPIKey(key), success: false, latency: 0, error: t('channels.dialogs.testAPIKeys.requestFailed'), disabled: false },
+            [key]: { keyPrefix: displayCredential(key), success: false, latency: 0, error: t('channels.dialogs.testAPIKeys.requestFailed'), disabled: false },
           }));
         }
       }
@@ -318,6 +444,13 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
   const getKeyResult = (key: string): TestAPIKeyResult | undefined => testResults[key];
   const isKeyDisabled = (key: string) => effectivelyDisabledSet.has(key);
 
+  const importPlaceholder = isOAuthSubscriptionChannel
+    ? t('channels.dialogs.keyManagement.oauthImportPlaceholder')
+    : t('channels.dialogs.keyManagement.importPlaceholder');
+  const importHint = isOAuthSubscriptionChannel
+    ? t('channels.dialogs.keyManagement.oauthImportHint')
+    : t('channels.dialogs.keyManagement.importHint');
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='flex max-h-[90vh] flex-col sm:max-w-4xl'>
@@ -335,15 +468,15 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
             <div className='flex items-center justify-between gap-2'>
               <div className='flex items-center gap-2 text-sm font-medium'>
                 <IconUpload className='h-4 w-4' />
-                {t('channels.dialogs.keyManagement.importTitle')}
+                {isOAuthSubscriptionChannel ? t('channels.dialogs.keyManagement.oauthImportTitle') : t('channels.dialogs.keyManagement.importTitle')}
               </div>
-              <span className='text-muted-foreground text-xs'>{t('channels.dialogs.keyManagement.importHint')}</span>
+              <span className='text-muted-foreground text-xs'>{importHint}</span>
             </div>
             <div className='mt-2 flex items-start gap-2'>
               <Textarea
                 value={bulkImportText}
                 onChange={(e) => setBulkImportText(e.target.value)}
-                placeholder={t('channels.dialogs.keyManagement.importPlaceholder')}
+                placeholder={importPlaceholder}
                 className='min-h-[64px] flex-1 font-mono text-xs'
               />
               <Button onClick={handleBulkImport} disabled={isPending || bulkImportText.trim().length === 0}>
@@ -410,7 +543,11 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
                 <TableHeader>
                   <TableRow>
                     <TableHead className='w-12'></TableHead>
-                    <TableHead>{t('channels.dialogs.keyManagement.keyColumn')}</TableHead>
+                    <TableHead>
+                      {isOAuthSubscriptionChannel
+                        ? t('channels.dialogs.keyManagement.subscriptionColumn')
+                        : t('channels.dialogs.keyManagement.keyColumn')}
+                    </TableHead>
                     <TableHead className='w-40'>{t('channels.dialogs.keyManagement.statusColumn')}</TableHead>
                     <TableHead className='w-28'>{t('channels.dialogs.keyManagement.latencyColumn')}</TableHead>
                     <TableHead className='w-36'>{t('channels.dialogs.keyManagement.actionsColumn')}</TableHead>
@@ -434,6 +571,8 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
                       const isTesting = testingKey === key;
                       const isDisabled = isKeyDisabled(key);
                       const result = getKeyResult(key);
+                      const displayName = displayCredential(key);
+                      const canDelete = !isLastKey && key !== OAUTH_CREDENTIAL_REF;
                       const handleCopy = async () => {
                         try {
                           await navigator.clipboard.writeText(key);
@@ -463,9 +602,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
                           <TableCell className='font-medium'>
                             <div className='flex items-center gap-2'>
                               {isTesting && <IconLoader2 className='h-3 w-3 animate-spin text-muted-foreground' />}
-                              <code className='bg-muted rounded px-2 py-0.5 font-mono text-sm'>
-                                {result ? result.keyPrefix : maskAPIKey(key)}
-                              </code>
+                              <code className='bg-muted rounded px-2 py-0.5 font-mono text-sm'>{result ? result.keyPrefix : displayName}</code>
                             </div>
                             {result?.error && (
                               <div className='mt-1 flex items-start gap-1 text-xs text-destructive'>
@@ -555,7 +692,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
 
                               <Popover open={confirmDeleteKey === key} onOpenChange={(o) => setConfirmDeleteKey(o ? key : null)}>
                                 <PopoverTrigger asChild>
-                                  <Button size='sm' variant='ghost' className='text-destructive h-7 w-7 p-0' disabled={isPending || isLastKey}>
+                                  <Button size='sm' variant='ghost' className='text-destructive h-7 w-7 p-0' disabled={isPending || !canDelete}>
                                     <IconTrash className='h-4 w-4' />
                                   </Button>
                                 </PopoverTrigger>

@@ -358,6 +358,34 @@ type TestChannelAPIKeysResult struct {
 	Results      []*TestAPIKeyResult
 }
 
+// channelCredentialRefs lists every credential ref of the channel: API keys
+// for key channels, named OAuth credential entry IDs for OAuth channels.
+func channelCredentialRefs(ch *biz.Channel) []string {
+	if ch.Credentials.IsOAuth() {
+		entries := ch.Credentials.GetAllOAuthCredentials()
+		refs := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			refs = append(refs, entry.ID)
+		}
+
+		return refs
+	}
+
+	return ch.Credentials.GetAllAPIKeys()
+}
+
+// credentialRefDisplayName returns the user-facing label of a credential ref:
+// the subscription name for OAuth entries, the masked value for API keys.
+func credentialRefDisplayName(ch *biz.Channel, ref string) string {
+	for _, entry := range ch.Credentials.GetAllOAuthCredentials() {
+		if entry.ID == ref && entry.Name != "" {
+			return entry.Name
+		}
+	}
+
+	return maskAPIKey(ref)
+}
+
 // TestChannelAPIKeys tests all API keys for a specific channel individually.
 func (processor *TestChannelOrchestrator) TestChannelAPIKeys(
 	ctx context.Context,
@@ -370,7 +398,7 @@ func (processor *TestChannelOrchestrator) TestChannelAPIKeys(
 		return nil, err
 	}
 
-	allKeys := ch.Credentials.GetAllAPIKeys()
+	allKeys := channelCredentialRefs(ch)
 	if len(allKeys) == 0 {
 		return nil, fmt.Errorf("no API keys configured for channel")
 	}
@@ -406,13 +434,14 @@ func (processor *TestChannelOrchestrator) TestChannelAPIKeys(
 	for i, key := range allKeys {
 		index := i
 		apiKey := key
+		displayName := credentialRefDisplayName(ch, key)
 
 		group.Go(func() error {
 			select {
 			case <-groupCtx.Done():
 				errMsg := groupCtx.Err().Error()
 				results[index] = &TestAPIKeyResult{
-					KeyPrefix: maskAPIKey(apiKey),
+					KeyPrefix: displayName,
 					Success:   false,
 					Error:     &errMsg,
 				}
@@ -423,7 +452,7 @@ func (processor *TestChannelOrchestrator) TestChannelAPIKeys(
 			default:
 			}
 
-			result := processor.testSingleKey(groupCtx, channelID, apiKey, testModel, useStream, responsesWebSocket, proxy, systemPrompt, userPrompt)
+			result := processor.testSingleKey(groupCtx, channelID, apiKey, displayName, testModel, useStream, responsesWebSocket, proxy, systemPrompt, userPrompt)
 			_, isDisabled := disabledSet[apiKey]
 			result.Disabled = isDisabled
 			results[index] = result
@@ -467,7 +496,7 @@ func (processor *TestChannelOrchestrator) TestSingleAPIKey(
 	}
 
 	// Verify the provided key is actually configured for this channel.
-	channelKeys := ch.Credentials.GetAllAPIKeys()
+	channelKeys := channelCredentialRefs(ch)
 	if len(channelKeys) == 0 {
 		return nil, fmt.Errorf("no API keys configured for channel")
 	}
@@ -494,18 +523,20 @@ func (processor *TestChannelOrchestrator) TestSingleAPIKey(
 		disabledSet[dk.Key] = struct{}{}
 	}
 
-	result := processor.testSingleKey(ctx, channelID, key, testModel, useStream, responsesWebSocket, proxy, systemPrompt, userPrompt)
+	result := processor.testSingleKey(ctx, channelID, key, credentialRefDisplayName(ch, key), testModel, useStream, responsesWebSocket, proxy, systemPrompt, userPrompt)
 	_, isDisabled := disabledSet[key]
 	result.Disabled = isDisabled
 
 	return result, nil
 }
 
-// testSingleKey tests a single API key by forcing the use of a specific key via SetAPIKey.
+// testSingleKey tests a single credential by forcing the channel to use it
+// (the API key itself for key channels, the credential ref for OAuth entries).
 func (processor *TestChannelOrchestrator) testSingleKey(
 	ctx context.Context,
 	channelID objects.GUID,
 	key string,
+	keyDisplayName string,
 	testModel string,
 	useStream bool,
 	responsesWebSocket bool,
@@ -513,7 +544,7 @@ func (processor *TestChannelOrchestrator) testSingleKey(
 	systemPrompt string,
 	userPrompt string,
 ) *TestAPIKeyResult {
-	keyPrefix := maskAPIKey(key)
+	keyPrefix := keyDisplayName
 
 	inbound := openai.NewInboundTransformer()
 

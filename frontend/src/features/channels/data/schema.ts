@@ -307,21 +307,32 @@ export const channelModelEntrySchema = z.object({
 export type ChannelModelEntry = z.infer<typeof channelModelEntrySchema>;
 
 // Channel Credentials
+export const oauthCredentialsSchema = z.object({
+  accessToken: z.string().optional().nullable(),
+  refreshToken: z.string().optional().nullable(),
+  clientID: z.string().optional().nullable(),
+  accountID: z.string().optional().nullable(),
+  expiresAt: z.string().optional().nullable(),
+  tokenType: z.string().optional().nullable(),
+  scopes: z.array(z.string()).optional().nullable(),
+});
+export type OAuthCredentials = z.infer<typeof oauthCredentialsSchema>;
+
+// One imported subscription (named OAuth credential) that rotates like an API
+// key. `id` is the credential ref used by the disable bookkeeping.
+export const namedOAuthCredentialsSchema = z.object({
+  id: z.string(),
+  name: z.string().optional().nullable(),
+  projectId: z.string().optional().nullable(),
+  credentials: oauthCredentialsSchema.optional().nullable(),
+});
+export type NamedOAuthCredentials = z.infer<typeof namedOAuthCredentialsSchema>;
+
 export const channelCredentialsSchema = z.object({
   apiKey: z.string().optional().nullable(),
   apiKeys: z.array(z.string()).optional().nullable(),
-  oauth: z
-    .object({
-      accessToken: z.string().optional().nullable(),
-      refreshToken: z.string().optional().nullable(),
-      clientID: z.string().optional().nullable(),
-      accountID: z.string().optional().nullable(),
-      expiresAt: z.string().optional().nullable(),
-      tokenType: z.string().optional().nullable(),
-      scopes: z.array(z.string()).optional().nullable(),
-    })
-    .optional()
-    .nullable(),
+  oauth: oauthCredentialsSchema.optional().nullable(),
+  oauths: z.array(namedOAuthCredentialsSchema).optional().nullable(),
   gcp: z
     .object({
       region: z.string(),
@@ -567,6 +578,8 @@ export const createChannelInputSchema = z
       apiKey: z.string().optional(),
       // apiKeys is used for regular API keys (multiple keys for load balancing)
       apiKeys: z.array(z.string()).optional().default([]),
+      // oauths is used for imported subscriptions (named OAuth credentials that rotate like API keys)
+      oauths: z.array(namedOAuthCredentialsSchema).optional(),
       gcp: z
         .object({
           region: z.string().optional(),
@@ -584,9 +597,10 @@ export const createChannelInputSchema = z
       data.type === 'github_copilot' ||
       data.type === 'xai_subscription';
     const hasApiKey = data.credentials.apiKey && data.credentials.apiKey.trim().length > 0;
+    const hasOauths = (data.credentials.oauths?.length ?? 0) > 0;
 
-    // github_copilot requires credentials.apiKey (OAuth JSON with access_token)
-    if (data.type === 'github_copilot' && !hasApiKey) {
+    // github_copilot requires credentials.apiKey (OAuth JSON) or an imported subscription entry
+    if (data.type === 'github_copilot' && !hasApiKey && !hasOauths) {
       ctx.addIssue({
         code: 'custom' as const,
         message: 'channels.dialogs.oauth.errors.copilotCredentialsRequired',
@@ -649,6 +663,8 @@ export const updateChannelInputSchema = z
         apiKey: z.string().optional(),
         // apiKeys 用于普通 API Key（支持多 key 负载均衡），OAuth 类型不使用此字段
         apiKeys: z.array(z.string()).optional(),
+        // oauths 用于导入的官方订阅（命名 OAuth 凭据，按 API Key 逻辑轮询）
+        oauths: z.array(namedOAuthCredentialsSchema).optional(),
         gcp: z
           .object({
             region: z.string().optional(),

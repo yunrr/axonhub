@@ -54,6 +54,22 @@ export function ChannelsDisabledAPIKeysDialog({ open, onOpenChange }: ChannelsDi
     enabled: open && !!currentRow?.id,
   });
 
+  // OAuth 订阅条目的 ref -> 名称映射，用于把禁用记录显示为订阅名。
+  const oauthEntryNameByID = useMemo(() => {
+    const map = new Map<string, string>();
+    (currentRow?.credentials?.oauths ?? []).forEach((entry) => {
+      if (entry.name) map.set(entry.id, entry.name);
+    });
+    return map;
+  }, [currentRow?.credentials?.oauths]);
+
+  const displayDisabledKey = (key: string) => {
+    if (key === OAUTH_CREDENTIAL_REF) {
+      return t('channels.dialogs.disabledAPIKeys.oauthCredential');
+    }
+    return oauthEntryNameByID.get(key) ?? `****${key.slice(-4)}`;
+  };
+
   const enableAPIKey = useEnableChannelAPIKey();
   const enableAllAPIKeys = useEnableAllChannelAPIKeys();
   const enableSelectedAPIKeys = useEnableSelectedChannelAPIKeys();
@@ -286,7 +302,7 @@ export function ChannelsDisabledAPIKeysDialog({ open, onOpenChange }: ChannelsDi
                                 {t('channels.dialogs.disabledAPIKeys.oauthCredential')}
                               </span>
                             ) : (
-                              <code className='bg-muted rounded px-2 py-0.5 font-mono text-sm'>****{dk.key.slice(-4)}</code>
+                              <code className='bg-muted rounded px-2 py-0.5 font-mono text-sm'>{displayDisabledKey(dk.key)}</code>
                             )}
                             <Tooltip>
                               <TooltipTrigger asChild>

@@ -595,10 +595,51 @@ func TestChannelService_DeleteDisabledAPIKeys_OAuthChannel(t *testing.T) {
 	ctx = ent.NewContext(ctx, client)
 	ctx = authz.WithTestBypass(ctx)
 
-	// Create an OAuth channel
+	// OAuth channels support deleting named credential entries: disable one of
+	// two subscriptions and delete it, the other one keeps serving.
+	ch, err := client.Channel.Create().
+		SetType(channel.TypeCodex).
+		SetName("OAuth Channel").
+		SetBaseURL("https://chatgpt.com/backend-api").
+		SetCredentials(objects.ChannelCredentials{
+			OAuths: []objects.NamedOAuthCredentials{
+				{ID: "oauth-a", Name: "account-a", Credentials: &objects.OAuthCredentials{AccessToken: "token-a", RefreshToken: "refresh-a"}},
+				{ID: "oauth-b", Name: "account-b", Credentials: &objects.OAuthCredentials{AccessToken: "token-b", RefreshToken: "refresh-b"}},
+			},
+		}).
+		SetSupportedModels([]string{"gpt-5"}).
+		SetDefaultTestModel("gpt-5").
+		SetDisabledAPIKeys([]objects.DisabledAPIKey{
+			{Key: "oauth-a", ErrorCode: 401, Reason: "expired"},
+		}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	result, err := svc.DeleteDisabledAPIKeys(ctx, ch.ID, []string{"oauth-a"})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Success)
+
+	updatedCh, err := client.Channel.Get(ctx, ch.ID)
+	require.NoError(t, err)
+	require.Len(t, updatedCh.Credentials.OAuths, 1)
+	require.Equal(t, "oauth-b", updatedCh.Credentials.OAuths[0].ID)
+	require.Len(t, updatedCh.DisabledAPIKeys, 0)
+}
+
+func TestChannelService_DeleteDisabledAPIKeys_LegacyOAuthChannelKeepsCredential(t *testing.T) {
+	svc, client := setupTestChannelService(t)
+	defer client.Close()
+
+	ctx := context.Background()
+	ctx = ent.NewContext(ctx, client)
+	ctx = authz.WithTestBypass(ctx)
+
+	// A legacy single-OAuth channel has exactly one credential behind the
+	// sentinel ref; deleting an unknown key is a no-op and the credential stays.
 	ch, err := client.Channel.Create().
 		SetType(channel.TypeOpenai).
-		SetName("OAuth Channel").
+		SetName("Legacy OAuth Channel").
 		SetBaseURL("https://api.openai.com/v1").
 		SetCredentials(objects.ChannelCredentials{
 			OAuth: &objects.OAuthCredentials{
@@ -610,11 +651,15 @@ func TestChannelService_DeleteDisabledAPIKeys_OAuthChannel(t *testing.T) {
 		Save(ctx)
 	require.NoError(t, err)
 
-	// Try to delete keys from OAuth channel
 	result, err := svc.DeleteDisabledAPIKeys(ctx, ch.ID, []string{"some-key"})
-	require.Error(t, err)
-	require.Nil(t, result)
-	require.Contains(t, err.Error(), "cannot delete API keys for OAuth channels")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Success)
+
+	updatedCh, err := client.Channel.Get(ctx, ch.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedCh.Credentials.OAuth)
+	require.Equal(t, "test-token", updatedCh.Credentials.OAuth.AccessToken)
 }
 
 func TestChannelService_DeleteDisabledAPIKeys_PreserveAtLeastOneKey(t *testing.T) {

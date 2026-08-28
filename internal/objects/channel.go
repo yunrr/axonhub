@@ -254,7 +254,15 @@ type ChannelCredentials struct {
 	APIKey string `json:"apiKey,omitempty"`
 
 	// OAuth is the OAuth credentials for the channel, for the OAuth channel, e.g. Codex, Claude code, Antigravity.
+	// It is kept for backward compatibility with existing data, recommend to use OAuths instead.
 	OAuth *OAuthCredentials `json:"oauth,omitempty"`
+
+	// OAuths is a list of named OAuth credentials for the channel, e.g. Codex,
+	// Claude Code, xAI subscription, GitHub Copilot and Antigravity. When present
+	// it is the authoritative OAuth credential set: the entries rotate following
+	// the same policy as APIKeys (trace-sticky selection, per-entry disable,
+	// auto-disable rules and scheduled recovery).
+	OAuths []NamedOAuthCredentials `json:"oauths,omitempty"`
 
 	// APIKeys is a list of API keys for the channel.
 	// When multiple keys are provided, they will be used in a round-robin fashion.
@@ -265,6 +273,18 @@ type ChannelCredentials struct {
 
 	// GCP is the GCP credentials for the channel.
 	GCP *GCPCredential `json:"gcp,omitempty"`
+}
+
+// NamedOAuthCredentials is one imported subscription (OAuth credential) with a
+// stable identity, so multiple subscriptions on one channel can be managed and
+// rotated like API keys. ID is the credential ref used by the disable
+// bookkeeping; Name is the user-visible label (e.g. account or project id).
+// ProjectID carries the provider-side project binding (e.g. Antigravity).
+type NamedOAuthCredentials struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name,omitempty"`
+	ProjectID   string            `json:"projectId,omitempty"`
+	Credentials *OAuthCredentials `json:"credentials,omitempty"`
 }
 
 // GetAllAPIKeys returns all API keys for the channel, combining APIKey and APIKeys fields.
@@ -297,19 +317,25 @@ const OAuthCredentialRef = "__oauth__"
 
 // GetAllCredentialRefs returns the identities of every credential the channel
 // can be disabled on. Key-based channels are identified by the API keys
-// themselves; an OAuth channel is represented by the single OAuthCredentialRef
-// so that auto-disable and scheduled recovery treat it as a one-key channel.
-//
-// This is deliberately separate from GetAllAPIKeys: the sentinel must never
-// reach outbound requests, credential management UI, the channel tester or
-// backups, all of which consume GetAllAPIKeys.
+// themselves. An OAuth channel is identified by its named OAuth credential
+// entries: multi-entry channels use the entry IDs, and a legacy single-OAuth
+// channel keeps the fixed OAuthCredentialRef sentinel so that existing disable
+// records keep matching. The sentinel and the entry IDs must never reach
+// outbound requests as API keys; the rotation provider translates refs into
+// OAuth credentials.
 func (c *ChannelCredentials) GetAllCredentialRefs() []string {
 	if c == nil {
 		return nil
 	}
 
 	if c.IsOAuth() {
-		return []string{OAuthCredentialRef}
+		entries := c.GetAllOAuthCredentials()
+		refs := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			refs = append(refs, entry.ID)
+		}
+
+		return refs
 	}
 
 	return c.GetAllAPIKeys()
@@ -359,6 +385,11 @@ func (c *ChannelCredentials) IsOAuth() bool {
 		return false
 	}
 
+	// Multi-entry OAuth channels are OAuth channels by definition.
+	if len(c.OAuths) > 0 {
+		return true
+	}
+
 	// Check new OAuth field first
 	if c.OAuth != nil && c.OAuth.AccessToken != "" {
 		return true
@@ -366,6 +397,53 @@ func (c *ChannelCredentials) IsOAuth() bool {
 
 	// Backward compatibility: check if APIKey contains OAuth JSON
 	return isOAuthJSON(c.APIKey)
+}
+
+// GetAllOAuthCredentials returns the effective named OAuth credential entries of
+// the channel. Entries from OAuths take precedence; legacy single-credential
+// channels (OAuth field or OAuth JSON in APIKey) are wrapped in one synthetic
+// entry carrying the fixed OAuthCredentialRef so that the rotation and disable
+// bookkeeping treat old and new data uniformly.
+func (c *ChannelCredentials) GetAllOAuthCredentials() []NamedOAuthCredentials {
+	if c == nil {
+		return nil
+	}
+
+	if len(c.OAuths) > 0 {
+		return c.OAuths
+	}
+
+	legacy, err := c.ResolveOAuthCredentials()
+	if err != nil || legacy == nil || legacy.AccessToken == "" && legacy.RefreshToken == "" {
+		return nil
+	}
+
+	return []NamedOAuthCredentials{{
+		ID:          OAuthCredentialRef,
+		Credentials: legacy,
+	}}
+}
+
+// GetOAuthEntry resolves one named OAuth credential entry by its credential ref.
+// The legacy sentinel resolves to the single legacy credential.
+func (c *ChannelCredentials) GetOAuthEntry(ref string) (*NamedOAuthCredentials, error) {
+	entries := c.GetAllOAuthCredentials()
+	for i := range entries {
+		if entries[i].ID == ref {
+			return &entries[i], nil
+		}
+	}
+
+	if ref == OAuthCredentialRef && len(entries) == 0 {
+		legacy, err := c.ResolveOAuthCredentials()
+		if err != nil {
+			return nil, err
+		}
+
+		return &NamedOAuthCredentials{ID: OAuthCredentialRef, Credentials: legacy}, nil
+	}
+
+	return nil, fmt.Errorf("oauth credential %q not found", ref)
 }
 
 func (c *ChannelCredentials) ResolveOAuthCredentials() (*OAuthCredentials, error) {

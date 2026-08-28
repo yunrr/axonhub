@@ -70,6 +70,15 @@ func (svc *ChannelService) onTokenRefreshed(ch *ent.Channel) func(ctx context.Co
 	}
 }
 
+// onOAuthEntryRefreshed persists a refreshed token back into the named OAuth
+// credential entry identified by ref.
+func (svc *ChannelService) onOAuthEntryRefreshed(ch *ent.Channel, ref string) func(ctx context.Context, refreshed *oauth.OAuthCredentials) error {
+	return func(ctx context.Context, refreshed *oauth.OAuthCredentials) error {
+		ctx = authz.WithSystemBypass(ctx, "channel-refresh-oauth-entry")
+		return svc.refreshOAuthCredentialEntry(ctx, ch, ref, refreshed)
+	}
+}
+
 func (svc *ChannelService) initChannelPerformances(ctx context.Context) {
 	ctx = authz.WithSystemBypass(ctx, "int-channel-load-performances")
 	if err := svc.loadChannelPerformances(ctx); err != nil {

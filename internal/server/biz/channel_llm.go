@@ -126,10 +126,11 @@ func buildChannel(c *ent.Channel, httpClient *httpclient.HttpClient) *Channel {
 	}
 
 	ch := &Channel{
-		Channel:              c,
-		HTTPClient:           httpClient,
-		cachedDisabledKeySet: disabledKeySet,
-		cachedEnabledAPIKeys: c.Credentials.GetEnabledAPIKeys(c.DisabledAPIKeys),
+		Channel:                     c,
+		HTTPClient:                  httpClient,
+		cachedDisabledKeySet:        disabledKeySet,
+		cachedEnabledAPIKeys:        c.Credentials.GetEnabledAPIKeys(c.DisabledAPIKeys),
+		cachedEnabledCredentialRefs: c.Credentials.GetEnabledCredentialRefs(c.DisabledAPIKeys),
 	}
 
 	// Precompute other caches
@@ -298,42 +299,26 @@ func (svc *ChannelService) buildCodexOutbound(
 			}
 		}
 
-		credsJSON := strings.TrimSpace(c.Credentials.APIKey)
-		if c.Credentials.OAuth != nil {
-			o := c.Credentials.OAuth
+		tokens, err := svc.assembleOAuthTokenProvider(c, ch,
+			func(entry *objects.NamedOAuthCredentials, onRefreshed func(ctx context.Context, refreshed *oauth.OAuthCredentials) error) (oauth.TokenGetter, AutoRefresher, error) {
+				p := codex.NewTokenProvider(codex.TokenProviderParams{
+					Credentials: entry.Credentials,
+					HTTPClient:  httpClient,
+					OnRefreshed: onRefreshed,
+				})
 
-			creds, err := (&oauth.OAuthCredentials{
-				AccessToken:  o.AccessToken,
-				RefreshToken: o.RefreshToken,
-				ClientID:     o.ClientID,
-				ExpiresAt:    o.ExpiresAt,
-				TokenType:    o.TokenType,
-				Scopes:       o.Scopes,
-			}).ToJSON()
-			if err != nil {
-				return nil, fmt.Errorf("failed to encode codex oauth credentials: %w", err)
-			}
-
-			credsJSON = creds
-		}
-
-		creds, err := oauth.ParseCredentialsJSON(credsJSON)
+				return p, p, nil
+			})
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse codex oauth credentials: %w", err)
+			return nil, fmt.Errorf("failed to build codex oauth token providers: %w", err)
 		}
-
-		p := codex.NewTokenProvider(codex.TokenProviderParams{
-			Credentials: creds,
-			HTTPClient:  httpClient,
-			OnRefreshed: svc.onTokenRefreshed(c),
-		})
 
 		if ch != nil && ch.startTokenProvider == nil {
-			setupAutoRefresh(ch, p, oauth.AutoRefreshOptions{})
+			setupAutoRefresh(ch, tokens, oauth.AutoRefreshOptions{})
 		}
 
 		return codex.NewOutboundTransformer(codex.Params{
-			TokenProvider:   p,
+			TokenProvider:   tokens,
 			BaseURL:         baseURL,
 			Transport:       transport,
 			AlphaSearchPath: alphaSearchPath,
@@ -490,8 +475,9 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 			return nil, fmt.Errorf("missing oauth credentials for channel %s", c.Name)
 		}
 	case channel.TypeAntigravity:
-		// Antigravity transformer currently consumes the single legacy APIKey field directly.
-		if strings.TrimSpace(c.Credentials.APIKey) == "" {
+		// Antigravity keeps either the legacy "refreshToken|projectID" composite
+		// in APIKey or named OAuth credential entries in OAuths.
+		if strings.TrimSpace(c.Credentials.APIKey) == "" && len(c.Credentials.OAuths) == 0 {
 			return nil, fmt.Errorf("missing api key for channel %s", c.Name)
 		}
 	case channel.TypeAnthropicGcp, channel.TypeAnthropicFake, channel.TypeOpenaiFake:
@@ -665,19 +651,25 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 
 		return ch, nil
 	case channel.TypeXaiSubscription:
-		credentials, err := c.Credentials.ResolveOAuthCredentials()
+		tokens, err := svc.assembleOAuthTokenProvider(c, ch,
+			func(entry *objects.NamedOAuthCredentials, onRefreshed func(ctx context.Context, refreshed *oauth.OAuthCredentials) error) (oauth.TokenGetter, AutoRefresher, error) {
+				p := xaisubscription.NewTokenProvider(xaisubscription.TokenProviderParams{
+					Credentials: entry.Credentials,
+					HTTPClient:  httpClient,
+					OnRefreshed: onRefreshed,
+				})
+
+				return p, p, nil
+			})
 		if err != nil {
-			return nil, fmt.Errorf("xAI subscription channel %s has invalid credentials: %w", c.Name, err)
+			return nil, fmt.Errorf("failed to build xAI subscription token providers for channel %s: %w", c.Name, err)
 		}
-		tokens := xaisubscription.NewTokenProvider(xaisubscription.TokenProviderParams{
-			Credentials: credentials,
-			HTTPClient:  httpClient,
-			OnRefreshed: svc.onTokenRefreshed(c),
-		})
+
 		outbound, err := xaisubscription.NewOutboundTransformer(tokens)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create xAI subscription outbound transformer: %w", err)
 		}
+
 		ch.Outbound = outbound
 		setupAutoRefresh(ch, tokens, oauth.AutoRefreshOptions{})
 
@@ -711,35 +703,19 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 	case channel.TypeClaudecode:
 		// Check if using OAuth credentials first
 		if c.Credentials.IsOAuth() {
-			credsJSON := strings.TrimSpace(c.Credentials.APIKey)
-			if c.Credentials.OAuth != nil {
-				o := c.Credentials.OAuth
+			tokens, err := svc.assembleOAuthTokenProvider(c, ch,
+				func(entry *objects.NamedOAuthCredentials, onRefreshed func(ctx context.Context, refreshed *oauth.OAuthCredentials) error) (oauth.TokenGetter, AutoRefresher, error) {
+					p := claudecode.NewTokenProvider(oauth.TokenProviderParams{
+						Credentials: entry.Credentials,
+						HTTPClient:  httpClient,
+						OnRefreshed: onRefreshed,
+					})
 
-				creds, err := (&oauth.OAuthCredentials{
-					AccessToken:  o.AccessToken,
-					RefreshToken: o.RefreshToken,
-					ClientID:     o.ClientID,
-					ExpiresAt:    o.ExpiresAt,
-					TokenType:    o.TokenType,
-					Scopes:       o.Scopes,
-				}).ToJSON()
-				if err != nil {
-					return nil, fmt.Errorf("failed to encode claudecode oauth credentials: %w", err)
-				}
-
-				credsJSON = creds
-			}
-
-			creds, err := oauth.ParseCredentialsJSON(credsJSON)
+					return p, p, nil
+				})
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse claudecode oauth credentials: %w", err)
+				return nil, fmt.Errorf("failed to build claudecode oauth token providers: %w", err)
 			}
-
-			tokens := claudecode.NewTokenProvider(oauth.TokenProviderParams{
-				Credentials: creds,
-				HTTPClient:  httpClient,
-				OnRefreshed: svc.onTokenRefreshed(c),
-			})
 
 			transformer, err := claudecode.NewOutboundTransformer(claudecode.Params{
 				TokenProvider:   tokens,
@@ -987,54 +963,33 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 			return nil, fmt.Errorf("missing oauth credentials for channel %s", c.Name)
 		}
 
-		credsJSON := strings.TrimSpace(c.Credentials.APIKey)
-		if credsJSON == "" {
-			return nil, fmt.Errorf("github_copilot channel %s has no credentials", c.Name)
-		}
+		tokens, err := svc.assembleOAuthTokenProvider(c, ch,
+			func(entry *objects.NamedOAuthCredentials, onRefreshed func(ctx context.Context, refreshed *oauth.OAuthCredentials) error) (oauth.TokenGetter, AutoRefresher, error) {
+				p, err := copilot.NewTokenProvider(copilot.TokenProviderParams{
+					Credentials: entry.Credentials,
+					HTTPClient:  httpClient,
+					OnRefreshed: onRefreshed,
+				})
+				if err != nil {
+					return nil, nil, err
+				}
 
-		if c.Credentials.OAuth != nil {
-			o := c.Credentials.OAuth
-
-			creds, err := (&oauth.OAuthCredentials{
-				AccessToken:  o.AccessToken,
-				RefreshToken: o.RefreshToken,
-				ClientID:     o.ClientID,
-				ExpiresAt:    o.ExpiresAt,
-				TokenType:    o.TokenType,
-				Scopes:       o.Scopes,
-			}).ToJSON()
-			if err != nil {
-				return nil, fmt.Errorf("failed to encode github_copilot oauth credentials for channel %s: %w", c.Name, err)
-			}
-
-			credsJSON = creds
-		}
-
-		creds, err := oauth.ParseCredentialsJSON(credsJSON)
+				return copilotTokenGetterAdapter{provider: p}, p, nil
+			})
 		if err != nil {
-			return nil, fmt.Errorf("github_copilot channel %s has invalid credentials: %w", c.Name, err)
-		}
-
-		// Create CopilotTokenProvider with the token exchanger
-		p, err := copilot.NewTokenProvider(copilot.TokenProviderParams{
-			Credentials: creds,
-			HTTPClient:  httpClient,
-			OnRefreshed: svc.onTokenRefreshed(c),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create CopilotTokenProvider: %w", err)
+			return nil, fmt.Errorf("failed to build github_copilot token providers for channel %s: %w", c.Name, err)
 		}
 
 		// Create the Copilot outbound transformer with LiteLLM headers
 		transformer, err := copilot.NewOutboundTransformer(copilot.OutboundTransformerParams{
-			TokenProvider: p,
+			TokenProvider: tokens,
 			BaseURL:       c.BaseURL,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create github_copilot outbound transformer: %w", err)
 		}
 		ch.Outbound = transformer
-		setupAutoRefresh(ch, p, oauth.AutoRefreshOptions{
+		setupAutoRefresh(ch, tokens, oauth.AutoRefreshOptions{
 			Interval:      5 * time.Minute,
 			RefreshBefore: 5 * time.Minute,
 		})
@@ -1112,20 +1067,39 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 
 		return ch, nil
 	case channel.TypeAntigravity:
+		source, err := newRotatingOAuthTokenProvider(ch, antigravityCredentialEntries(c), c.Name,
+			func(entry *objects.NamedOAuthCredentials) (oauth.TokenGetter, AutoRefresher, error) {
+				if entry.Credentials == nil || entry.Credentials.RefreshToken == "" {
+					return nil, nil, fmt.Errorf("antigravity credential %q has no refresh token", entry.ID)
+				}
+
+				p := antigravity.NewTokenProvider(oauth.TokenProviderParams{
+					Credentials: &oauth.OAuthCredentials{
+						RefreshToken: entry.Credentials.RefreshToken,
+						ClientID:     antigravity.ClientID,
+						Scopes:       antigravity.Scopes,
+					},
+					HTTPClient:  httpClient,
+					OnRefreshed: svc.onOAuthEntryRefreshed(c, entry.ID),
+				})
+
+				return p, p, nil
+			})
+		if err != nil {
+			return nil, fmt.Errorf("failed to build antigravity token providers for channel %s: %w", c.Name, err)
+		}
+
 		transformer, err := antigravity.NewTransformer(
-			antigravity.Config{BaseURL: c.BaseURL, APIKey: c.Credentials.APIKey},
+			antigravity.Config{BaseURL: c.BaseURL},
 			antigravity.WithHTTPClient(httpClient),
-			antigravity.WithOnTokenRefreshed(svc.onTokenRefreshed(c)),
+			antigravity.WithCredentialSource(source),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create antigravity outbound transformer: %w", err)
 		}
 
 		ch.Outbound = transformer
-		tokens := transformer.GetTokenProvider()
-		if tokens != nil {
-			setupAutoRefresh(ch, tokens, oauth.AutoRefreshOptions{})
-		}
+		setupAutoRefresh(ch, source, oauth.AutoRefreshOptions{})
 
 		return ch, nil
 	case channel.TypeOllama:
@@ -1213,6 +1187,42 @@ func (svc *ChannelService) refreshOAuthToken(ctx context.Context, ch *ent.Channe
 	}
 
 	updated.OAuth = refreshed
+
+	_, err := svc.entFromContext(ctx).Channel.UpdateOneID(ch.ID).SetCredentials(updated).Save(ctx)
+
+	return err
+}
+
+// refreshOAuthCredentialEntry persists a refreshed token back into the named
+// OAuth credential entry identified by ref. Channels still on the legacy
+// single-credential layout (OAuth field / APIKey JSON) delegate to
+// refreshOAuthToken so their on-disk format is preserved.
+func (svc *ChannelService) refreshOAuthCredentialEntry(ctx context.Context, ch *ent.Channel, ref string, refreshed *oauth.OAuthCredentials) error {
+	if refreshed == nil {
+		return nil
+	}
+
+	if len(ch.Credentials.OAuths) == 0 {
+		return svc.refreshOAuthToken(ctx, ch, refreshed)
+	}
+
+	updated := ch.Credentials
+	found := false
+
+	for i := range updated.OAuths {
+		if updated.OAuths[i].ID != ref {
+			continue
+		}
+
+		updated.OAuths[i].Credentials = refreshed
+		found = true
+
+		break
+	}
+
+	if !found {
+		return fmt.Errorf("oauth credential %q not found on channel %s", ref, ch.Name)
+	}
 
 	_, err := svc.entFromContext(ctx).Channel.UpdateOneID(ch.ID).SetCredentials(updated).Save(ctx)
 
