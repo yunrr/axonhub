@@ -506,6 +506,7 @@ function parseClaudeQuotaData(quotaData: unknown, limits: ProviderQuotaLimit[]):
 export type ProviderQuotaChannel = {
   id: string;
   name: string;
+  subscriptions?: ProviderQuotaChannel[];
   quotaStatus: {
     status: 'available' | 'warning' | 'exhausted' | 'unknown';
     nextResetAt: string | null;
@@ -654,7 +655,7 @@ function hasProviderQuotaStatus(node: QueryChannelNode | null | undefined): node
   return node?.providerQuotaStatus != null;
 }
 
-function parseChannelNode(node: QueryChannelNodeWithQuota): ProviderQuotaChannel {
+function parseChannelNodeBase(node: QueryChannelNodeWithQuota): ProviderQuotaChannel {
   const quotaStatus = node.providerQuotaStatus;
   const providerType = quotaStatus.providerType;
 
@@ -797,6 +798,38 @@ function parseChannelNode(node: QueryChannelNodeWithQuota): ProviderQuotaChannel
     type: node.type as ProviderQuotaChannel['type'],
     quotaStatus: { ...base.quotaStatus, quotaData: node.providerQuotaStatus.quotaData as ProviderQuotaDataCommon },
   };
+}
+
+function parseChannelNode(node: QueryChannelNodeWithQuota): ProviderQuotaChannel {
+  const channel = parseChannelNodeBase(node);
+  const rawData = node.providerQuotaStatus.quotaData;
+  if (typeof rawData !== 'object' || rawData === null) return channel;
+
+  const rawSubscriptions = (rawData as { _subscriptions?: unknown })._subscriptions;
+  if (!Array.isArray(rawSubscriptions)) return channel;
+
+  const subscriptions = rawSubscriptions.flatMap((raw) => {
+    if (typeof raw !== 'object' || raw === null) return [];
+    const subscription = raw as Record<string, unknown>;
+    if (typeof subscription.id !== 'string' || typeof subscription.quotaData !== 'object' || subscription.quotaData === null) return [];
+
+    const status = subscription.status;
+    const parsedStatus = status === 'available' || status === 'warning' || status === 'exhausted' || status === 'unknown' ? status : 'unknown';
+    const parsed = parseChannelNodeBase({
+      ...node,
+      name: typeof subscription.name === 'string' && subscription.name ? subscription.name : subscription.id,
+      providerQuotaStatus: {
+        ...node.providerQuotaStatus,
+        status: parsedStatus,
+        ready: subscription.ready === true,
+        nextResetAt: typeof subscription.nextResetAt === 'string' ? subscription.nextResetAt : null,
+        quotaData: subscription.quotaData,
+      },
+    });
+    return [parsed];
+  });
+
+  return subscriptions.length > 0 ? { ...channel, subscriptions } : channel;
 }
 
 export function useProviderQuotaStatuses() {

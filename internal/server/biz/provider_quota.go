@@ -17,12 +17,18 @@ import (
 	"github.com/looplj/axonhub/internal/ent/providerquotastatus"
 	"github.com/looplj/axonhub/internal/ent/schema/schematype"
 	"github.com/looplj/axonhub/internal/log"
+	"github.com/looplj/axonhub/internal/objects"
 	"github.com/looplj/axonhub/internal/server/biz/provider_quota"
 	"github.com/looplj/axonhub/internal/server/scheduler"
 	"github.com/looplj/axonhub/llm/httpclient"
 )
 
 const maxConcurrentQuotaChecks = 8
+
+// quotaSubscriptionCheckConcurrency bounds the parallel per-subscription quota
+// requests within one multi-subscription channel; channels are already bounded
+// separately by maxConcurrentQuotaChecks.
+const quotaSubscriptionCheckConcurrency = 4
 
 // Quota check failures back off exponentially so a persistently failing channel
 // (expired credentials, or a scraped provider dashboard whose markup changed) is
@@ -106,6 +112,12 @@ type QuotaChannelStatus struct {
 	Status       providerquotastatus.Status
 	Ready        bool
 	Limits       []provider_quota.QuotaLimitStatus
+}
+
+type quotaSubscriptionCheck struct {
+	Entry objects.NamedOAuthCredentials
+	Data  provider_quota.QuotaData
+	Err   error
 }
 
 // EffectiveStatus returns the effective quota status for the given limit type.
@@ -537,7 +549,7 @@ func (svc *ProviderQuotaService) loadQuotaCache(ctx context.Context) {
 			ProviderType: r.ProviderType.String(),
 			Status:       r.Status,
 			Ready:        r.Ready,
-			Limits:       extractLimitsFromQuotaData(r.QuotaData),
+			Limits:       extractQuotaCacheLimits(r.QuotaData),
 		})
 	}
 
@@ -627,7 +639,13 @@ func (svc *ProviderQuotaService) ResetChannelQuotaNow(ctx context.Context, chann
 		return fmt.Errorf("invalid codex quota checker type")
 	}
 
-	if _, err := codexChecker.ResetNow(ctx, ch); err != nil {
+	resetChannel := ch
+	if entries := ch.Credentials.GetAllOAuthCredentials(); len(entries) > 1 {
+		return fmt.Errorf("reset requires selecting a single codex subscription")
+	} else if len(entries) == 1 {
+		resetChannel = channelWithOAuthEntry(ch, entries[0])
+	}
+	if _, err := codexChecker.ResetNow(ctx, resetChannel); err != nil {
 		return fmt.Errorf("failed to reset codex quota: %w", err)
 	}
 
@@ -743,8 +761,7 @@ func (svc *ProviderQuotaService) checkChannelQuota(ctx context.Context, ch *ent.
 		return
 	}
 
-	// Make quota check request
-	quotaData, err := checker.CheckQuota(ctx, ch)
+	quotaData, err := svc.checkQuotaData(ctx, ch, providerType, checker, now)
 	if err != nil {
 		log.Error(ctx, "Quota check failed",
 			log.Int("channel_id", ch.ID),
@@ -757,7 +774,6 @@ func (svc *ProviderQuotaService) checkChannelQuota(ctx context.Context, ch *ent.
 	}
 
 	// Save quota status
-	svc.fillPeriodQuotas(ctx, ch.ID, &quotaData, now)
 	svc.saveQuotaStatus(ctx, ch.ID, providerType, quotaData, now)
 
 	log.Debug(ctx, "Updated quota status",
@@ -765,6 +781,195 @@ func (svc *ProviderQuotaService) checkChannelQuota(ctx context.Context, ch *ent.
 		log.String("provider", providerType),
 		log.String("status", quotaData.Status),
 		log.Bool("ready", quotaData.Ready))
+}
+
+func (svc *ProviderQuotaService) checkQuotaData(
+	ctx context.Context,
+	ch *ent.Channel,
+	providerType string,
+	checker provider_quota.QuotaChecker,
+	now time.Time,
+) (provider_quota.QuotaData, error) {
+	entries := ch.Credentials.GetAllOAuthCredentials()
+	if len(entries) == 0 {
+		data, err := checker.CheckQuota(ctx, ch)
+		if err == nil {
+			svc.fillPeriodQuotas(ctx, ch.ID, &data, now)
+		}
+		return data, err
+	}
+	if len(entries) == 1 {
+		data, err := checker.CheckQuota(ctx, channelWithOAuthEntry(ch, entries[0]))
+		if err == nil {
+			svc.fillPeriodQuotas(ctx, ch.ID, &data, now)
+		}
+		return data, err
+	}
+
+	// 多订阅逐条目并发检查。渠道级用量日志无法拆分出单账号的成本归属，
+	// 因此这里刻意不做 fillPeriodQuotas——否则周期配额估算（渠道总成本
+	// 除以单账号用量比例）会被整体放大，宁缺毋滥。
+	checks := make([]quotaSubscriptionCheck, len(entries))
+	eg := &errgroup.Group{}
+	eg.SetLimit(min(quotaSubscriptionCheckConcurrency, len(entries)))
+	for i, entry := range entries {
+		entry, index := entry, i
+		eg.Go(func() error {
+			data, err := checker.CheckQuota(ctx, channelWithOAuthEntry(ch, entry))
+			checks[index] = quotaSubscriptionCheck{Entry: entry, Data: data, Err: err}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return provider_quota.QuotaData{}, err
+	}
+
+	data := svc.aggregateOAuthQuotaData(providerType, checks)
+
+	// 全部条目失败时返回错误，让调用方走 saveQuotaError 的错误退避账本，
+	// 与单账号渠道的重试节奏保持一致；部分失败时顶层状态已代表可用账号。
+	allFailed := true
+	for i := range checks {
+		if checks[i].Err == nil {
+			allFailed = false
+			break
+		}
+	}
+	if allFailed {
+		return data, fmt.Errorf("all %d subscription quota checks failed", len(entries))
+	}
+
+	return data, nil
+}
+
+func channelWithOAuthEntry(ch *ent.Channel, entry objects.NamedOAuthCredentials) *ent.Channel {
+	entryChannel := *ch
+	credentials := ch.Credentials
+	credentials.APIKey = ""
+	credentials.OAuth = entry.Credentials
+	credentials.OAuths = nil
+	entryChannel.Credentials = credentials
+	return &entryChannel
+}
+
+func (svc *ProviderQuotaService) aggregateOAuthQuotaData(
+	providerType string,
+	checks []quotaSubscriptionCheck,
+) provider_quota.QuotaData {
+	var representative *provider_quota.QuotaData
+	representativeRank := -1
+	representativeUsage := 0.0
+	availableCount := 0
+	warningCount := 0
+	exhaustedCount := 0
+	unknownCount := 0
+
+	for i := range checks {
+		check := &checks[i]
+		if check.Err != nil {
+			unknownCount++
+			continue
+		}
+
+		switch check.Data.Status {
+		case "available":
+			availableCount++
+		case "warning":
+			warningCount++
+		case "exhausted":
+			exhaustedCount++
+		default:
+			unknownCount++
+		}
+
+		usage := quotaDataUsage(check.Data)
+		rank := quotaStatusRank(providerquotastatus.Status(check.Data.Status))
+		// 代表条目与顶层状态同源：取状态最优的账号（并列时取用量更高的那个，
+		// 即最接近限额的可用账号）。这样折叠行的窗口数据与渠道级状态一致，
+		// 受限账号的明细始终在 _subscriptions 列表里可见。
+		if representative == nil || rank < representativeRank || (rank == representativeRank && usage > representativeUsage) {
+			data := check.Data
+			representative = &data
+			representativeRank = rank
+			representativeUsage = usage
+		}
+	}
+
+	status := "unknown"
+	ready := false
+	switch {
+	case availableCount > 0:
+		status, ready = "available", true
+	case warningCount > 0:
+		status, ready = "warning", true
+	case exhaustedCount > 0 && unknownCount == 0:
+		status = "exhausted"
+	}
+
+	rawData := map[string]any{
+		"_subscriptions": svc.subscriptionQuotaData(checks),
+	}
+	if representative != nil {
+		data := svc.mergeLimitsIntoQuotaData(*representative)
+		data["_subscriptions"] = rawData["_subscriptions"]
+		data["subscription_count"] = len(checks)
+		data["available_subscription_count"] = availableCount
+		rawData = data
+	} else {
+		rawData["error"] = "all OAuth subscriptions quota checks failed"
+	}
+
+	result := provider_quota.QuotaData{
+		Status:       status,
+		ProviderType: providerType,
+		RawData:      rawData,
+		Ready:        ready,
+	}
+	if representative != nil {
+		// The channel-level status already aggregates all subscriptions. Do not
+		// expose one subscription's limits to the routing cache, otherwise an
+		// exhausted representative could override an available subscription in
+		// QuotaChannelStatus.EffectiveStatus. The representative limits remain
+		// in RawData for the collapsed UI row and are expanded per subscription.
+		result.NextResetAt = representative.NextResetAt
+	}
+	return result
+}
+
+func quotaDataUsage(data provider_quota.QuotaData) float64 {
+	usage := 0.0
+	for _, limit := range data.Limits {
+		usage = max(usage, limit.UsageRatio)
+	}
+	if len(data.Limits) == 0 && data.Status == "exhausted" {
+		return 1
+	}
+	return usage
+}
+
+func (svc *ProviderQuotaService) subscriptionQuotaData(checks []quotaSubscriptionCheck) []map[string]any {
+	result := make([]map[string]any, 0, len(checks))
+	for _, check := range checks {
+		entryData := map[string]any{
+			"id":     check.Entry.ID,
+			"name":   check.Entry.Name,
+			"status": "unknown",
+			"ready":  false,
+		}
+		if check.Err != nil {
+			entryData["error"] = check.Err.Error()
+			entryData["quotaData"] = map[string]any{"error": check.Err.Error()}
+		} else {
+			entryData["status"] = check.Data.Status
+			entryData["ready"] = check.Data.Ready
+			entryData["quotaData"] = svc.mergeLimitsIntoQuotaData(check.Data)
+			if check.Data.NextResetAt != nil {
+				entryData["nextResetAt"] = check.Data.NextResetAt.Format(time.RFC3339)
+			}
+		}
+		result = append(result, entryData)
+	}
+	return result
 }
 
 func (svc *ProviderQuotaService) saveQuotaStatus(
@@ -876,7 +1081,7 @@ func (svc *ProviderQuotaService) saveQuotaError(
 			return
 		}
 
-		existingLimits := extractLimitsFromQuotaData(existing.QuotaData)
+		existingLimits := extractQuotaCacheLimits(existing.QuotaData)
 		svc.updateQuotaCache(ch.ID, providerType, existing.Status, existing.Ready, existingLimits)
 
 		return
@@ -942,8 +1147,9 @@ func hasCredentialsForProvider(ch *ent.Channel) bool {
 		}
 	}
 
-	if ch.Type == channel.TypeCodex || ch.Type == channel.TypeClaudecode || ch.Type == channel.TypeXaiSubscription {
-		return ch.Credentials.OAuth != nil || isOAuthJSON(ch.Credentials.APIKey)
+	if ch.Type == channel.TypeCodex || ch.Type == channel.TypeClaudecode || ch.Type == channel.TypeXaiSubscription || ch.Type == channel.TypeGithubCopilot {
+		return len(ch.Credentials.GetAllOAuthCredentials()) > 0 ||
+			(ch.Type == channel.TypeGithubCopilot && strings.TrimSpace(ch.Credentials.APIKey) != "")
 	}
 
 	if ch.Type == channel.TypeCline {
@@ -1067,4 +1273,15 @@ func extractLimitsFromQuotaData(data map[string]any) []provider_quota.QuotaLimit
 	}
 
 	return limits
+}
+
+func extractQuotaCacheLimits(data map[string]any) []provider_quota.QuotaLimitStatus {
+	// Multi-subscription quota data contains representative limits for the
+	// collapsed UI row. They must not enter the routing cache as channel limits:
+	// the channel status already reflects whether any subscription is usable.
+	if _, ok := data["_subscriptions"]; ok {
+		return nil
+	}
+
+	return extractLimitsFromQuotaData(data)
 }

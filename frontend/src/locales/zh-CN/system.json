@@ -415,6 +415,8 @@
   "quota.label.subscription": "订阅",
   "quota.label.in_overage": "已超额",
   "system.providerQuota.refresh.label": "刷新配额",
+  "quota.label.subscription_count": "{{count}} 个订阅",
+  "quota.label.toggle_subscriptions": "显示订阅配额",
   "system.tabs.proxy": "代理",
   "system.proxy.title": "代理预设",
   "system.proxy.description": "管理已保存的代理服务器配置。这些预设可在配置渠道时快速选择。",

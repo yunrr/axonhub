@@ -426,6 +426,8 @@
   "quota.label.monthly_spend": "Monthly spend",
   "quota.provider.apertis": "Apertis",
   "system.providerQuota.refresh.label": "Refresh quotas",
+  "quota.label.subscription_count": "{{count}} subscriptions",
+  "quota.label.toggle_subscriptions": "Show subscription quotas",
   "system.tabs.proxy": "Proxy",
   "system.proxy.title": "Proxy Presets",
   "system.proxy.description": "Manage saved proxy server configurations. These presets can be quickly selected when configuring channels.",

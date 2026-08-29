@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { format } from 'date-fns';
 import { useQueryClient } from '@tanstack/react-query';
-import { Loader2, RefreshCw, Zap, Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryWarning } from 'lucide-react';
+import { Loader2, RefreshCw, Zap, Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryWarning, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -339,10 +339,21 @@ function PeriodQuotaEstimate({ limits }: { limits: ProviderQuotaLimit[] }) {
   );
 }
 
-function QuotaRow({ channel, enforcementMode, allowedChannelIDs }: { channel: ProviderQuotaChannel; enforcementMode?: QuotaEnforcementMode | null; allowedChannelIDs?: string[] | null }) {
+function QuotaRow({
+  channel,
+  enforcementMode,
+  allowedChannelIDs,
+  isSubscription = false,
+}: {
+  channel: ProviderQuotaChannel;
+  enforcementMode?: QuotaEnforcementMode | null;
+  allowedChannelIDs?: string[] | null;
+  isSubscription?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const [isResetting, setIsResetting] = useState(false);
+  const [subscriptionsExpanded, setSubscriptionsExpanded] = useState(false);
   const quota = channel.quotaStatus;
 
   const status = quota.status;
@@ -835,7 +846,7 @@ function QuotaRow({ channel, enforcementMode, allowedChannelIDs }: { channel: Pr
                   </div>
                 )}
 
-                {(status === 'exhausted' || status === 'warning') && (
+                {!isSubscription && (channel.subscriptions?.length ?? 0) <= 1 && (status === 'exhausted' || status === 'warning') && (
                   <div className='border-border/60 flex items-center justify-end gap-2 border-t border-dashed pt-3'>
                     <Button size='sm' variant='outline' className='h-7 text-xs' disabled={isResetting} onClick={handleResetCodexQuota}>
                       {isResetting ? <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' /> : <Zap className='mr-1.5 h-3.5 w-3.5' />}
@@ -1708,6 +1719,34 @@ function QuotaRow({ channel, enforcementMode, allowedChannelIDs }: { channel: Pr
               </div>
             );
           })()}
+        </div>
+      )}
+
+      {channel.subscriptions && channel.subscriptions.length > 0 && (
+        <div className='ml-6 mt-3'>
+          <button
+            type='button'
+            className='text-muted-foreground hover:text-foreground flex items-center gap-1.5 text-xs font-medium transition-colors'
+            onClick={() => setSubscriptionsExpanded((expanded) => !expanded)}
+            aria-expanded={subscriptionsExpanded}
+            title={t('quota.label.toggle_subscriptions')}
+          >
+            {subscriptionsExpanded ? <ChevronDown className='h-3.5 w-3.5' /> : <ChevronRight className='h-3.5 w-3.5' />}
+            {t('quota.label.subscription_count', { count: channel.subscriptions.length })}
+          </button>
+          {subscriptionsExpanded && (
+            <div className='border-border/60 mt-2 border-l pl-3'>
+              {channel.subscriptions.map((subscription) => (
+                <QuotaRow
+                  key={subscription.id}
+                  channel={subscription}
+                  enforcementMode={null}
+                  allowedChannelIDs={null}
+                  isSubscription
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
