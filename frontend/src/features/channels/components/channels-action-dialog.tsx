@@ -1849,7 +1849,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
         }}
       >
         <DialogContent
-          className={`flex max-h-[90vh] flex-col transition-all duration-300 ${showFetchedModelsPanel || showSupportedModelsPanel || showApiKeysPanel ? 'sm:max-w-6xl' : 'sm:max-w-4xl'}`}
+          className={`flex max-h-[90vh] flex-col overflow-hidden transition-all duration-300 ${showFetchedModelsPanel || showSupportedModelsPanel || showApiKeysPanel ? 'sm:max-w-6xl' : 'sm:max-w-4xl'}`}
         >
           <DialogHeader className='flex-shrink-0 text-left'>
             <DialogTitle>{isEdit ? t('channels.dialogs.edit.title') : t('channels.dialogs.create.title')}</DialogTitle>
@@ -1871,7 +1871,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
                         <FormLabel className='text-base font-semibold'>{t('channels.dialogs.fields.provider.label')}</FormLabel>
                         <div
                           ref={setProviderListRef}
-                          className={`flex-1 overflow-x-auto overflow-y-hidden pb-2 md:overflow-x-hidden md:overflow-y-auto md:pb-0 md:pr-2 ${isOAuthChannel ? 'cursor-not-allowed opacity-60' : ''}`}
+                          className={`relative flex-1 overflow-x-auto overflow-y-hidden pb-2 md:overflow-x-hidden md:overflow-y-auto md:pb-0 md:pr-2 ${isOAuthChannel ? 'cursor-not-allowed opacity-60' : ''}`}
                         >
                           <RadioGroup
                             value={selectedProvider}
@@ -1919,7 +1919,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
                     </div>
 
                     {/* Right Side - Form Fields */}
-                    <div className='flex-1 space-y-6 overflow-y-auto md:pr-4'>
+                    <div className='relative flex-1 space-y-6 overflow-y-auto md:pr-4'>
                       {selectedProvider !== 'jina' && selectedProvider !== 'codex' && selectedProvider !== 'claudecode' && (
                         <FormItem className='grid grid-cols-1 items-start gap-x-6 gap-y-2 md:grid-cols-8'>
                           <FormLabel className='pt-2 font-medium md:col-span-2 md:text-right'>
@@ -2918,7 +2918,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
 
             {/* Expandable Side Panel */}
             <div
-              className='border-border flex min-h-0 flex-col overflow-hidden border-l pt-1.5 pl-4 transition-all duration-300 ease-out'
+              className='border-border relative flex min-h-0 flex-col overflow-hidden border-l pt-1.5 pl-4 transition-all duration-300 ease-out'
               style={{
                 width: showFetchedModelsPanel || showSupportedModelsPanel || showApiKeysPanel ? '400px' : '0px',
                 opacity: showFetchedModelsPanel || showSupportedModelsPanel || showApiKeysPanel ? 1 : 0,
