@@ -6,7 +6,9 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   useProviderQuotaStatuses,
@@ -398,6 +400,8 @@ function QuotaRow({
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const [isResetting, setIsResetting] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetSubscriptionID, setResetSubscriptionID] = useState<string | undefined>(undefined);
   const [subscriptionsExpanded, setSubscriptionsExpanded] = useState(false);
   const quota = channel.quotaStatus;
 
@@ -418,12 +422,12 @@ function QuotaRow({
   const batteryLevel = getBatteryLevel(percentage, status);
   const BatteryIcon = getBatteryIcon(batteryLevel);
 
-  const handleResetCodexQuota = async () => {
+  const handleResetCodexQuota = async (subscriptionID?: string) => {
     if (channel.type !== 'codex') return;
 
     setIsResetting(true);
     try {
-      await resetChannelQuotaNow(channel.id);
+      await resetChannelQuotaNow(channel.id, subscriptionID);
       toast.success(t('quota.codex.resetSuccess'));
       // Trigger a backend quota refresh, then refetch the cached statuses.
       await checkProviderQuotas();
@@ -435,6 +439,17 @@ function QuotaRow({
     } finally {
       setIsResetting(false);
     }
+  };
+
+  const handleResetCodexQuotaClick = () => {
+    // Multi-subscription channels must reset one subscription at a time, so
+    // ask which one instead of firing against an arbitrary account.
+    if ((channel.subscriptions?.length ?? 0) > 1) {
+      setResetSubscriptionID(channel.subscriptions![0].id);
+      setResetDialogOpen(true);
+      return;
+    }
+    void handleResetCodexQuota();
   };
 
   const formatWindowDuration = (seconds?: number) => {
@@ -926,11 +941,46 @@ function QuotaRow({
                         className='h-7 text-xs'
                         disabled={isResetting || !canAttemptReset}
                         title={!canAttemptReset ? t('quota.codex.noResetCredits') : undefined}
-                        onClick={handleResetCodexQuota}
+                        onClick={handleResetCodexQuotaClick}
                       >
                         {isResetting ? <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' /> : <Zap className='mr-1.5 h-3.5 w-3.5' />}
                         {t('quota.codex.resetNow')}
                       </Button>
+                      <Dialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+                        <DialogContent className='sm:max-w-md'>
+                          <DialogHeader>
+                            <DialogTitle>{t('quota.codex.resetSelectTitle')}</DialogTitle>
+                            <DialogDescription>{t('quota.codex.resetSelectDescription')}</DialogDescription>
+                          </DialogHeader>
+                          <Select value={resetSubscriptionID} onValueChange={setResetSubscriptionID}>
+                            <SelectTrigger>
+                              <SelectValue placeholder={t('quota.codex.resetSelectPlaceholder')} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {(channel.subscriptions ?? []).map((subscription) => (
+                                <SelectItem key={subscription.id} value={subscription.id}>
+                                  {subscription.name || subscription.id}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <DialogFooter>
+                            <Button variant='outline' onClick={() => setResetDialogOpen(false)}>
+                              {t('quota.codex.resetCancel')}
+                            </Button>
+                            <Button
+                              disabled={isResetting || !resetSubscriptionID}
+                              onClick={() => {
+                                setResetDialogOpen(false);
+                                void handleResetCodexQuota(resetSubscriptionID);
+                              }}
+                            >
+                              {isResetting ? <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' /> : <Zap className='mr-1.5 h-3.5 w-3.5' />}
+                              {t('quota.codex.resetNow')}
+                            </Button>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
                     </div>
                   )}
                 </div>

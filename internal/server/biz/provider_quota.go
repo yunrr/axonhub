@@ -653,7 +653,11 @@ func (svc *ProviderQuotaService) ManualCheck(ctx context.Context) {
 // ListResets returns the reset capability and available resets for a channel.
 // Providers that do not implement Resetter report Supported=false without an
 // error so callers can treat resetting as an optional capability.
-func (svc *ProviderQuotaService) ListResets(ctx context.Context, channelID int) (provider_quota.ResetList, error) {
+//
+// When the channel carries multiple imported subscriptions, subscriptionID
+// selects which one to inspect; without it the channel-level credentials are
+// used as-is.
+func (svc *ProviderQuotaService) ListResets(ctx context.Context, channelID int, subscriptionID ...string) (provider_quota.ResetList, error) {
 	ch, err := svc.db.Channel.Query().Where(channel.IDEQ(channelID)).Only(ctx)
 	if err != nil {
 		return provider_quota.ResetList{}, fmt.Errorf("failed to load channel: %w", err)
@@ -680,7 +684,12 @@ func (svc *ProviderQuotaService) ListResets(ctx context.Context, channelID int) 
 		return provider_quota.ResetList{}, fmt.Errorf("channel has no credentials")
 	}
 
-	resets, err := resetter.ListResets(ctx, ch)
+	resetChannel, err := narrowChannelToSubscription(ch, subscriptionID)
+	if err != nil {
+		return provider_quota.ResetList{}, err
+	}
+
+	resets, err := resetter.ListResets(ctx, resetChannel)
 	resets.Supported = true
 	if err != nil {
 		return resets, fmt.Errorf("failed to list %s quota resets: %w", providerType, err)
@@ -690,7 +699,12 @@ func (svc *ProviderQuotaService) ListResets(ctx context.Context, channelID int) 
 }
 
 // ResetChannelQuotaNow attempts to redeem a provider-managed reset for a channel.
-func (svc *ProviderQuotaService) ResetChannelQuotaNow(ctx context.Context, channelID int) error {
+//
+// When the channel carries multiple imported subscriptions, subscriptionID
+// selects which one to reset; omitting it on a multi-subscription channel is
+// rejected so callers pick an explicit target instead of resetting an
+// arbitrary account.
+func (svc *ProviderQuotaService) ResetChannelQuotaNow(ctx context.Context, channelID int, subscriptionID ...string) error {
 	ch, err := svc.db.Channel.Query().Where(channel.IDEQ(channelID)).Only(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load channel: %w", err)
@@ -717,7 +731,12 @@ func (svc *ProviderQuotaService) ResetChannelQuotaNow(ctx context.Context, chann
 		return fmt.Errorf("channel has no credentials")
 	}
 
-	if err := resetter.Reset(ctx, ch); err != nil {
+	resetChannel, err := narrowChannelToSubscription(ch, subscriptionID)
+	if err != nil {
+		return err
+	}
+
+	if err := resetter.Reset(ctx, resetChannel); err != nil {
 		return fmt.Errorf("failed to reset %s quota: %w", providerType, err)
 	}
 
@@ -733,6 +752,31 @@ func (svc *ProviderQuotaService) ResetChannelQuotaNow(ctx context.Context, chann
 	svc.mu.Unlock()
 
 	return nil
+}
+
+// narrowChannelToSubscription scopes a channel down to a single imported
+// subscription when the caller passes a subscription ID. A single-subscription
+// channel is returned as-is; a multi-subscription channel without an explicit
+// ID is rejected so resets never hit an arbitrary account.
+func narrowChannelToSubscription(ch *ent.Channel, subscriptionID []string) (*ent.Channel, error) {
+	entries := ch.Credentials.GetAllOAuthCredentials()
+	if len(entries) <= 1 {
+		return ch, nil
+	}
+
+	id := ""
+	if len(subscriptionID) > 0 {
+		id = strings.TrimSpace(subscriptionID[0])
+	}
+	if id == "" {
+		return nil, fmt.Errorf("reset requires selecting a single subscription (channel has %d)", len(entries))
+	}
+	for _, entry := range entries {
+		if entry.ID == id {
+			return channelWithOAuthEntry(ch, entry), nil
+		}
+	}
+	return nil, fmt.Errorf("subscription %q not found on channel", id)
 }
 
 func (svc *ProviderQuotaService) runQuotaCheckForce(ctx context.Context) {

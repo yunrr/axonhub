@@ -8,8 +8,8 @@ const CHECK_PROVIDER_QUOTAS_QUERY = `
 `;
 
 const RESET_CHANNEL_QUOTA_NOW_MUTATION = `
-  mutation ResetChannelQuotaNow($channelID: ID!) {
-    resetChannelQuotaNow(channelID: $channelID)
+  mutation ResetChannelQuotaNow($channelID: ID!, $subscriptionID: String) {
+    resetChannelQuotaNow(channelID: $channelID, subscriptionID: $subscriptionID)
   }
 `;
 
@@ -39,8 +39,8 @@ export async function checkProviderQuotas() {
   return graphqlRequest(CHECK_PROVIDER_QUOTAS_QUERY);
 }
 
-export async function resetChannelQuotaNow(channelID: string) {
-  return graphqlRequest(RESET_CHANNEL_QUOTA_NOW_MUTATION, { channelID });
+export async function resetChannelQuotaNow(channelID: string, subscriptionID?: string) {
+  return graphqlRequest(RESET_CHANNEL_QUOTA_NOW_MUTATION, { channelID, subscriptionID: subscriptionID ?? null });
 }
 
 export type ProviderQuotaReset = {

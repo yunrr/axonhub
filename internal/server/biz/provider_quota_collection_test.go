@@ -341,3 +341,87 @@ func TestProviderQuotaService_ListResets_UsesOptionalResetter(t *testing.T) {
 	require.Len(t, resets.Resets, 1)
 	require.EqualValues(t, 1, resetter.listCalls.Load())
 }
+
+// capturingQuotaResetter records the channel it receives so tests can verify
+// subscription narrowing without hitting provider APIs.
+type capturingQuotaResetter struct {
+	countingQuotaChecker
+	got []*ent.Channel
+}
+
+func (c *capturingQuotaResetter) ListResets(_ context.Context, ch *ent.Channel) (provider_quota.ResetList, error) {
+	c.got = append(c.got, ch)
+	return provider_quota.ResetList{Supported: true}, nil
+}
+
+func (c *capturingQuotaResetter) Reset(_ context.Context, ch *ent.Channel) error {
+	c.got = append(c.got, ch)
+	return nil
+}
+
+func createMultiSubscriptionCodexChannel(t *testing.T, ctx context.Context, client *ent.Client) *ent.Channel {
+	t.Helper()
+
+	result, err := client.Channel.Create().
+		SetName("Codex Multi").
+		SetType(channel.TypeCodex).
+		SetStatus(channel.StatusEnabled).
+		SetCredentials(objects.ChannelCredentials{
+			OAuths: []objects.NamedOAuthCredentials{
+				{ID: "sub-a", Name: "A", Credentials: &objects.OAuthCredentials{AccessToken: "token-a"}},
+				{ID: "sub-b", Name: "B", Credentials: &objects.OAuthCredentials{AccessToken: "token-b"}},
+			},
+		}).
+		SetSupportedModels([]string{"test-model"}).
+		SetDefaultTestModel("test-model").
+		Save(ctx)
+	require.NoError(t, err)
+	return result
+}
+
+func TestProviderQuotaService_ResetChannelQuotaNow_RequiresSubscriptionForMultiSubscription(t *testing.T) {
+	service, _, ctx, client := setupProviderQuotaCollectionService(t)
+	defer client.Close()
+
+	resetter := &capturingQuotaResetter{countingQuotaChecker: countingQuotaChecker{providerType: "codex"}}
+	service.checkers["codex"] = resetter
+	channelEntity := createMultiSubscriptionCodexChannel(t, ctx, client)
+
+	err := service.ResetChannelQuotaNow(ctx, channelEntity.ID)
+
+	require.ErrorContains(t, err, "selecting a single subscription")
+	require.Empty(t, resetter.got)
+}
+
+func TestProviderQuotaService_ResetChannelQuotaNow_RejectsUnknownSubscription(t *testing.T) {
+	service, _, ctx, client := setupProviderQuotaCollectionService(t)
+	defer client.Close()
+
+	resetter := &capturingQuotaResetter{countingQuotaChecker: countingQuotaChecker{providerType: "codex"}}
+	service.checkers["codex"] = resetter
+	channelEntity := createMultiSubscriptionCodexChannel(t, ctx, client)
+
+	err := service.ResetChannelQuotaNow(ctx, channelEntity.ID, "no-such-sub")
+
+	require.ErrorContains(t, err, "not found on channel")
+	require.Empty(t, resetter.got)
+}
+
+func TestProviderQuotaService_ResetChannelQuotaNow_NarrowsToSelectedSubscription(t *testing.T) {
+	service, _, ctx, client := setupProviderQuotaCollectionService(t)
+	defer client.Close()
+
+	resetter := &capturingQuotaResetter{countingQuotaChecker: countingQuotaChecker{providerType: "codex"}}
+	service.checkers["codex"] = resetter
+	channelEntity := createMultiSubscriptionCodexChannel(t, ctx, client)
+
+	require.NoError(t, service.ResetChannelQuotaNow(ctx, channelEntity.ID, "sub-b"))
+
+	// The first captured channel is the one handed to Reset; a quota refresh
+	// after the reset may capture more.
+	require.NotEmpty(t, resetter.got)
+	got := resetter.got[0]
+	require.NotNil(t, got.Credentials.OAuth)
+	require.Equal(t, "token-b", got.Credentials.OAuth.AccessToken)
+	require.Empty(t, got.Credentials.OAuths)
+}
