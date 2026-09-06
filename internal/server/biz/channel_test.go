@@ -416,6 +416,32 @@ func TestChannelService_CreateChannel(t *testing.T) {
 		})
 	}
 }
+func TestChannelService_CommandCodeRequiresHTTPS(t *testing.T) {
+	svc, client := setupTestChannelService(t)
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(ent.NewContext(t.Context(), client))
+	_, err := svc.CreateChannel(ctx, ent.CreateChannelInput{
+		Type:        channel.TypeCommandcode,
+		Name:        "Command Code insecure",
+		BaseURL:     lo.ToPtr("http://api.commandcode.ai/provider/v1"),
+		Credentials: objects.ChannelCredentials{APIKey: "test-key"},
+	})
+	require.ErrorContains(t, err, "HTTPS")
+
+	created, err := svc.CreateChannel(ctx, ent.CreateChannelInput{
+		Type:        channel.TypeCommandcode,
+		Name:        "Command Code secure",
+		BaseURL:     lo.ToPtr("https://api.commandcode.ai/provider/v1"),
+		Credentials: objects.ChannelCredentials{APIKey: "test-key"},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.UpdateChannel(ctx, created.ID, &ent.UpdateChannelInput{
+		BaseURL: lo.ToPtr("http://api.commandcode.ai/provider/v1"),
+	})
+	require.ErrorContains(t, err, "HTTPS")
+}
 
 func TestChannelService_UpdateChannel(t *testing.T) {
 	svc, client := setupTestChannelService(t)
@@ -539,6 +565,84 @@ func TestChannelService_UpdateChannel(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestChannelService_UpdateChannel_PreservesManagementKeyWhenOmitted(t *testing.T) {
+	svc, client := setupTestChannelService(t)
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(ent.NewContext(context.Background(), client))
+	created, err := client.Channel.Create().
+		SetType(channel.TypeZenmux).
+		SetName("ZenMux channel").
+		SetBaseURL("https://zenmux.ai/api/v1").
+		SetCredentials(objects.ChannelCredentials{APIKey: "inference-key", ManagementAPIKey: "management-key"}).
+		SetSupportedModels([]string{"test-model"}).
+		SetDefaultTestModel("test-model").
+		Save(ctx)
+	require.NoError(t, err)
+
+	updated, err := svc.UpdateChannel(ctx, created.ID, &ent.UpdateChannelInput{
+		Credentials: &objects.ChannelCredentials{APIKey: "updated-inference-key"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "updated-inference-key", updated.Credentials.APIKey)
+	require.Equal(t, "management-key", updated.Credentials.ManagementAPIKey)
+}
+
+func TestChannelService_UpdateChannel_ClearsManagementKeyWhenChangingProvider(t *testing.T) {
+	svc, client := setupTestChannelService(t)
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(ent.NewContext(context.Background(), client))
+	created, err := client.Channel.Create().
+		SetType(channel.TypeZenmux).
+		SetName("ZenMux conversion").
+		SetBaseURL("https://zenmux.ai/api/v1").
+		SetCredentials(objects.ChannelCredentials{APIKey: "inference-key", ManagementAPIKey: "management-key"}).
+		SetSupportedModels([]string{"test-model"}).
+		SetDefaultTestModel("test-model").
+		Save(ctx)
+	require.NoError(t, err)
+
+	updated, err := svc.UpdateChannel(ctx, created.ID, &ent.UpdateChannelInput{
+		Type:        lo.ToPtr(channel.TypeOpenai),
+		BaseURL:     lo.ToPtr("https://api.openai.com/v1"),
+		Credentials: &objects.ChannelCredentials{APIKey: "openai-key"},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, channel.TypeOpenai, updated.Type)
+	require.Empty(t, updated.Credentials.ManagementAPIKey)
+}
+
+func TestChannelService_DuplicateChannelPreservesZenmuxManagementKey(t *testing.T) {
+	svc, client := setupTestChannelService(t)
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(ent.NewContext(context.Background(), client))
+	source, err := client.Channel.Create().
+		SetType(channel.TypeZenmux).
+		SetName("ZenMux source").
+		SetBaseURL("https://zenmux.ai/api/v1").
+		SetCredentials(objects.ChannelCredentials{APIKey: "inference-key", ManagementAPIKey: "management-key"}).
+		SetSupportedModels([]string{"test-model"}).
+		SetDefaultTestModel("test-model").
+		Save(ctx)
+	require.NoError(t, err)
+
+	duplicated, err := svc.DuplicateChannel(ctx, source.ID, ent.CreateChannelInput{
+		Type:             channel.TypeZenmux,
+		BaseURL:          lo.ToPtr("https://zenmux.ai/api/v1"),
+		Name:             "ZenMux duplicate",
+		Credentials:      objects.ChannelCredentials{APIKey: "duplicate-inference-key"},
+		SupportedModels:  []string{"test-model"},
+		DefaultTestModel: "test-model",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "management-key", duplicated.Credentials.ManagementAPIKey)
 }
 
 func TestChannelService_UpdateChannelStatus(t *testing.T) {

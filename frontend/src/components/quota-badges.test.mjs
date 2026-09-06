@@ -55,3 +55,28 @@ test('Codex usage bar color tracks used percentage, not reset-window elapsed tim
     'Codex usage bar color must not be severity-adjusted by reset-window elapsed time'
   );
 });
+
+test('Command Code monthly hover matches the other windows', () => {
+  const source = read('components/quota-badges.tsx');
+  const commandCodeBlock = source.slice(source.indexOf("{isCommandCodeType(channel.type) &&"), source.indexOf("{channel.type === 'moonshot_coding' &&"));
+
+  assert.match(commandCodeBlock, /monthlyDurationPct[\s\S]*quota\.label\.time_elapsed/);
+  assert.doesNotMatch(commandCodeBlock, /quota\.label\.commandcode\.monthly_remaining/);
+  assert.doesNotMatch(commandCodeBlock, /subscription_status/);
+});
+
+test('Codex reset can be attempted after a transient reset-list failure', () => {
+  const quotaBadges = read('components/quota-badges.tsx');
+  const codexBlock = isolateCodexBlock(quotaBadges);
+
+  assert.match(
+    codexBlock,
+    /const canAttemptReset =\s*qd\._resets\?\.supported === true && \(Boolean\(qd\._resets\.error\) \|\| availableResetCount > 0\)/,
+    'a supported provider should allow a fresh reset attempt when reset-list metadata failed'
+  );
+  assert.match(
+    codexBlock,
+    /disabled=\{isResetting \|\| !canAttemptReset\}/,
+    'the reset button should use the retry-aware availability condition'
+  );
+});

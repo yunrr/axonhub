@@ -241,6 +241,33 @@ type ChannelSettings struct {
 	// already has endpoints for. When set for a model, endpoint selection is
 	// restricted to those formats; otherwise all channel endpoints are eligible.
 	ModelProtocols []ModelProtocol `json:"modelProtocols,omitempty"`
+
+	// ProviderQuota holds provider-specific quota collection credentials and
+	// options. Fields are sensitive (e.g. auth cookies) and only exposed to
+	// operators holding channel write permission.
+	ProviderQuota *ChannelProviderQuotaSettings `json:"providerQuota,omitempty"`
+}
+
+// ChannelProviderQuotaSettings groups per-provider quota collection settings.
+type ChannelProviderQuotaSettings struct {
+	// CommandCode holds the quota collection settings for Command Code channels.
+	CommandCode *CommandCodeQuotaSettings `json:"commandCode,omitempty"`
+}
+
+// CommandCodeQuotaSettings holds the credentials used to query the Command Code
+// account quota. AuthCookie is the commandcode.ai session cookie (a
+// "__Secure-commandcode_prod_.session_token" style value) sent to the internal
+// billing endpoints.
+type CommandCodeQuotaSettings struct {
+	AuthCookie string `json:"authCookie,omitempty"`
+}
+
+// String redacts the auth cookie so settings never leak it into logs.
+func (s CommandCodeQuotaSettings) String() string {
+	if s.AuthCookie == "" {
+		return "CommandCodeQuotaSettings{AuthCookie: \"\"}"
+	}
+	return "CommandCodeQuotaSettings{AuthCookie: <redacted>}"
 }
 
 type RetryableErrorPattern struct {
@@ -300,6 +327,11 @@ type ChannelCredentials struct {
 	// APIKeys is a list of API keys for the channel.
 	// When multiple keys are provided, they will be used in a round-robin fashion.
 	APIKeys []string `json:"apiKeys,omitempty"`
+
+	// ManagementAPIKey is an optional provider management/console API key used only
+	// for server-side quota checks (e.g. ZenMux). It is never attached to inference
+	// requests and never exposed to clients beyond credential write APIs.
+	ManagementAPIKey string `json:"managementApiKey,omitempty"`
 
 	// Azure configuration for the channel.
 	Azure *AzureCredential `json:"azure,omitempty"`

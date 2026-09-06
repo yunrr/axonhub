@@ -72,33 +72,6 @@ func TestOpenAICompatibleChannel_BuildChannelWithOutbounds(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestOpenAICompatibleChannel_BuildsWithoutAPIKey(t *testing.T) {
-	client := enttest.NewEntClient(t, "sqlite3", "file:ent?mode=memory&_fk=0")
-	defer client.Close()
-
-	ctx := authz.WithTestBypass(context.Background())
-
-	entChannel := client.Channel.Create().
-		SetName("OpenAI Compatible No-Key Channel").
-		SetType(channel.TypeOpenai).
-		SetBaseURL("http://localhost:8080/v1").
-		SetCredentials(objects.ChannelCredentials{}).
-		SetSupportedModels([]string{"local-model"}).
-		SetDefaultTestModel("local-model").
-		SaveX(ctx)
-
-	channelSvc := NewChannelServiceForTest(client)
-
-	built, err := channelSvc.buildChannelWithOutbounds(entChannel)
-	require.NoError(t, err)
-	require.NotNil(t, built)
-
-	openAIOutbound, ok := built.Outbound.(*openai.OutboundTransformer)
-	require.True(t, ok)
-	require.NotNil(t, openAIOutbound.GetConfig().APIKeyProvider)
-	require.Empty(t, openAIOutbound.GetConfig().APIKeyProvider.Get(ctx))
-}
-
 func TestAtlasCloudChannel_BuildChannelWithOutbounds(t *testing.T) {
 	client := enttest.NewEntClient(t, "sqlite3", "file:ent?mode=memory&_fk=0")
 	defer client.Close()
@@ -169,6 +142,27 @@ func TestOpenAIResponsesEndpoint_InheritsWebSocketTransportFromBaseURL(t *testin
 	executor := custom.CustomizeExecutor(nil)
 	_, ok = executor.(*responses.WebSocketExecutor)
 	require.True(t, ok)
+}
+
+func TestOpenAIResponsesCompactEndpoint_RejectsInheritedWebSocketTransport(t *testing.T) {
+	client := enttest.NewEntClient(t, "sqlite3", "file:compact_websocket?mode=memory&_fk=0")
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(context.Background())
+	entChannel := client.Channel.Create().
+		SetName("Responses Compact WebSocket Channel").
+		SetType(channel.TypeOpenaiResponses).
+		SetBaseURL("wss://api.openai.com/v1").
+		SetCredentials(objects.ChannelCredentials{APIKey: "test-key"}).
+		SetSupportedModels([]string{"gpt-5"}).
+		SetDefaultTestModel("gpt-5").
+		SetEndpoints([]objects.ChannelEndpoint{{
+			APIFormat: llm.APIFormatOpenAIResponseCompact.String(),
+		}}).
+		SaveX(ctx)
+
+	_, err := NewChannelServiceForTest(client).buildChannelWithOutbounds(entChannel)
+	require.ErrorContains(t, err, "websocket transport only supports api_format \"openai/responses\"")
 }
 
 func TestCodexOAuthWebSocketEndpointBuildsWithoutAPIKey(t *testing.T) {

@@ -10,6 +10,7 @@ export const apiFormatSchema = z.enum([
   'openai/image_variation',
   'openai/embeddings',
   'openai/video',
+  'zenmux/video',
   'openai/moderations',
   'openai/alpha_search',
   'openai/audio_speech',
@@ -34,6 +35,7 @@ export const configurableChannelEndpointApiFormats = [
   'openai/image_edit',
   'openai/image_variation',
   'openai/embeddings',
+  'zenmux/video',
   'openai/moderations',
   'openai/alpha_search',
   'openai/audio_speech',
@@ -124,6 +126,12 @@ export const channelTypeSchema = z.enum([
   'evolink',
   'evolink_anthropic',
   'groq',
+  'zenmux',
+  'zenmux_responses',
+  'zenmux_anthropic',
+  'zenmux_gemini',
+  'commandcode',
+  'commandcode_anthropic',
 ]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 
@@ -291,6 +299,20 @@ export const modelProtocolSchema = z.object({
 });
 export type ModelProtocol = z.infer<typeof modelProtocolSchema>;
 
+// Provider quota collection settings stored inside channel settings. Mirrors the
+// GraphQL `CommandCodeQuotaSettings` / `ChannelProviderQuotaSettings` types; it
+// is used for the Command Code billing-quota cookie, kept separate from API
+// credentials.
+export const commandCodeQuotaSettingsSchema = z.object({
+  authCookie: z.string().optional().nullable(),
+});
+export type CommandCodeQuotaSettings = z.infer<typeof commandCodeQuotaSettingsSchema>;
+
+export const channelProviderQuotaSettingsSchema = z.object({
+  commandCode: commandCodeQuotaSettingsSchema.optional().nullable(),
+});
+export type ChannelProviderQuotaSettings = z.infer<typeof channelProviderQuotaSettingsSchema>;
+
 // Channel Settings
 export const channelSettingsSchema = z.object({
   extraModelPrefix: z.string().optional(),
@@ -309,6 +331,7 @@ export const channelSettingsSchema = z.object({
   retryableStatusCodes: z.array(z.number().int().min(400).max(599)).optional().nullable(),
   retryableErrorPatterns: z.array(retryableErrorPatternSchema).optional().nullable(),
   modelProtocols: z.array(modelProtocolSchema).optional().nullable(),
+  providerQuota: channelProviderQuotaSettingsSchema.optional().nullable(),
 });
 
 export type ChannelSettings = z.infer<typeof channelSettingsSchema>;
@@ -346,6 +369,9 @@ export type NamedOAuthCredentials = z.infer<typeof namedOAuthCredentialsSchema>;
 export const channelCredentialsSchema = z.object({
   apiKey: z.string().optional().nullable(),
   apiKeys: z.array(z.string()).optional().nullable(),
+  // Optional provider management/console API key (e.g. ZenMux) used only for
+  // server-side quota checks; inference keeps using apiKey/apiKeys.
+  managementApiKey: z.string().optional().nullable(),
   oauth: oauthCredentialsSchema.optional().nullable(),
   oauths: z.array(namedOAuthCredentialsSchema).optional().nullable(),
   gcp: z
@@ -358,6 +384,15 @@ export const channelCredentialsSchema = z.object({
     .nullable(),
 });
 export type ChannelCredentials = z.infer<typeof channelCredentialsSchema>;
+
+export const providerQuotaStatusSchema = z.object({
+  status: z.enum(['available', 'warning', 'exhausted', 'unknown']),
+  nextResetAt: z.string().optional().nullable(),
+  ready: z.boolean(),
+  quotaData: z.record(z.string(), z.unknown()),
+  providerType: z.string(),
+});
+export type ProviderQuotaStatus = z.infer<typeof providerQuotaStatusSchema>;
 
 // Disabled API Key
 export const disabledAPIKeySchema = z.object({
@@ -385,8 +420,9 @@ export const channelSchema = z.object({
   status: channelStatusSchema,
   policies: channelPoliciesSchema.optional().nullable(),
   credentials: channelCredentialsSchema.optional().nullable(),
+  providerQuotaStatus: providerQuotaStatusSchema.optional().nullable(),
   disabledAPIKeys: z.array(disabledAPIKeySchema).optional().nullable(),
-  supportedModels: z.array(z.string()),
+  supportedModels: z.array(z.string()).default([]),
   autoSyncSupportedModels: z.boolean().default(false),
   autoSyncModelPattern: z.string().optional().default(''),
   manualModels: z.array(z.string()).optional().default([]).nullable(),
@@ -593,6 +629,8 @@ export const createChannelInputSchema = z
       apiKey: z.string().optional(),
       // apiKeys is used for regular API keys (multiple keys for load balancing)
       apiKeys: z.array(z.string()).optional().default([]),
+      // Optional management key used only by the backend for quota checks
+      managementApiKey: z.string().optional(),
       // oauths is used for imported subscriptions (named OAuth credentials that rotate like API keys)
       oauths: z.array(namedOAuthCredentialsSchema).optional(),
       gcp: z
@@ -678,6 +716,8 @@ export const updateChannelInputSchema = z
         apiKey: z.string().optional(),
         // apiKeys 用于普通 API Key（支持多 key 负载均衡），OAuth 类型不使用此字段
         apiKeys: z.array(z.string()).optional(),
+        // Optional management key used only by the backend for quota checks
+        managementApiKey: z.string().optional(),
         // oauths 用于导入的官方订阅（命名 OAuth 凭据，按 API Key 逻辑轮询）
         oauths: z.array(namedOAuthCredentialsSchema).optional(),
         gcp: z

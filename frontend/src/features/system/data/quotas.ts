@@ -27,6 +27,7 @@ const PROVIDER_QUOTA_STATUSES_QUERY = `
             ready
             quotaData
             providerType
+            accountKey
           }
         }
       }
@@ -42,9 +43,26 @@ export async function resetChannelQuotaNow(channelID: string) {
   return graphqlRequest(RESET_CHANNEL_QUOTA_NOW_MUTATION, { channelID });
 }
 
+export type ProviderQuotaReset = {
+  id: string;
+  status: string;
+  type?: string;
+  grantedAt?: string;
+  expiresAt?: string;
+  title?: string;
+};
+
+export type ProviderQuotaResetList = {
+  supported: boolean;
+  resets: ProviderQuotaReset[];
+  error?: string;
+};
+
 type ProviderQuotaDataCommon = {
   plan_type?: string;
   error?: string;
+  error_code?: string;
+  _resets?: ProviderQuotaResetList;
 };
 
 type ProviderClaudeQuotaWindow = {
@@ -236,6 +254,7 @@ export type ProviderOpenCodeGoQuotaData = ProviderQuotaDataCommon & {
   };
 };
 
+
 export type KimiCodeUsageRow = {
   label: string;
   used: number;
@@ -285,6 +304,33 @@ export type ZhipuWindowRow = {
 export type ProviderZhipuQuotaData = ProviderQuotaDataCommon & {
   rows?: ZhipuWindowRow[];
   level?: string;
+};
+
+export type ProviderZenmuxQuotaPlan = {
+  tier?: string;
+  amount_usd?: number;
+  expires_at?: string;
+};
+
+export type ProviderZenmuxQuotaWindow = {
+  usage_percentage?: number;
+  resets_at?: string;
+  max_flows?: number;
+  used_flows?: number;
+  remaining_flows?: number;
+  used_value_usd?: number;
+  max_value_usd?: number;
+};
+
+export type ProviderZenmuxQuotaData = ProviderQuotaDataCommon & {
+  plan?: ProviderZenmuxQuotaPlan;
+  account_status?: string;
+  quota_5_hour?: ProviderZenmuxQuotaWindow;
+  quota_7_day?: ProviderZenmuxQuotaWindow;
+  quota_monthly?: {
+    max_flows?: number;
+    max_value_usd?: number;
+  };
 };
 
 export type ClineQuotaWindow = {
@@ -383,6 +429,29 @@ export function isClineActivePassQuotaData(qd: ProviderClineQuotaData): qd is Pr
 export function isClineUnavailablePassQuotaData(qd: ProviderClineQuotaData): qd is ProviderClineUnavailablePassQuotaData {
   return 'pass_state' in qd && qd.pass_state === 'unavailable';
 }
+
+export type CommandCodeQuotaWindow = {
+  used_usd?: number;
+  cap_usd?: number;
+  usage_percent?: number;
+  reset_time?: string;
+};
+
+export type ProviderCommandCodeQuotaData = ProviderQuotaDataCommon & {
+  plan_id?: string;
+  plan_label?: string;
+  subscription_status?: string;
+  current_period_end?: string;
+  credits?: {
+    monthly_remaining_usd?: number;
+    monthly_limit_usd?: number;
+    purchased_credits_usd?: number;
+  };
+  windows?: {
+    five_hour?: CommandCodeQuotaWindow;
+    weekly?: CommandCodeQuotaWindow;
+  };
+};
 
 /**
  * A single limit window as normalized by the backend and stashed under
@@ -507,6 +576,13 @@ export type ProviderQuotaChannel = {
   id: string;
   name: string;
   subscriptions?: ProviderQuotaChannel[];
+  // Account identity shared by channels drawing from the same provider account
+  // (e.g. the same ZenMux management key). Undefined means the channel has its
+  // own quota account.
+  accountKey?: string;
+  // Names of the channels sharing this account, only set on the representative
+  // entry built by the quota popover grouping.
+  sharedAccountNames?: string[];
   quotaStatus: {
     status: 'available' | 'warning' | 'exhausted' | 'unknown';
     nextResetAt: string | null;
@@ -581,6 +657,12 @@ export type ProviderQuotaChannel = {
       };
     }
   | {
+      type: 'zenmux' | 'zenmux_responses' | 'zenmux_anthropic' | 'zenmux_gemini';
+      quotaStatus: {
+        quotaData: ProviderZenmuxQuotaData;
+      };
+    }
+  | {
       type: 'openai' | 'openai_responses';
       providerType: 'wafer';
       quotaStatus: {
@@ -622,6 +704,12 @@ export type ProviderQuotaChannel = {
         quotaData: ProviderQuotaDataCommon;
       };
     }
+  | {
+      type: 'commandcode' | 'commandcode_anthropic';
+      quotaStatus: {
+        quotaData: ProviderCommandCodeQuotaData;
+      };
+    }
 );
 
 type ProviderQuotaStatusNode = {
@@ -630,6 +718,7 @@ type ProviderQuotaStatusNode = {
   ready: boolean;
   quotaData: unknown;
   providerType: string;
+  accountKey?: string | null;
 };
 
 type QueryChannelNode = {
@@ -662,6 +751,7 @@ function parseChannelNodeBase(node: QueryChannelNodeWithQuota): ProviderQuotaCha
   const base = {
     id: node.id,
     name: node.name,
+    accountKey: optionalString(quotaStatus.accountKey),
     quotaStatus: {
       status: quotaStatus.status,
       nextResetAt: quotaStatus.nextResetAt,
@@ -669,6 +759,14 @@ function parseChannelNodeBase(node: QueryChannelNodeWithQuota): ProviderQuotaCha
       limits: parseQuotaLimits(quotaStatus.quotaData),
     },
   };
+
+  if (node.type === 'zenmux' || node.type === 'zenmux_responses' || node.type === 'zenmux_anthropic' || node.type === 'zenmux_gemini') {
+    return {
+      ...base,
+      type: node.type as 'zenmux' | 'zenmux_responses' | 'zenmux_anthropic' | 'zenmux_gemini',
+      quotaStatus: { ...base.quotaStatus, quotaData: node.providerQuotaStatus.quotaData as ProviderZenmuxQuotaData },
+    };
+  }
 
   if (node.type === 'claudecode') {
     return {
@@ -793,11 +891,18 @@ function parseChannelNodeBase(node: QueryChannelNodeWithQuota): ProviderQuotaCha
     };
   }
 
+  if (node.type === 'commandcode' || node.type === 'commandcode_anthropic') {
+    return {
+      ...base,
+      type: node.type as 'commandcode' | 'commandcode_anthropic',
+      quotaStatus: { ...base.quotaStatus, quotaData: node.providerQuotaStatus.quotaData as ProviderCommandCodeQuotaData },
+    };
+  }
   return {
     ...base,
     type: node.type as ProviderQuotaChannel['type'],
     quotaStatus: { ...base.quotaStatus, quotaData: node.providerQuotaStatus.quotaData as ProviderQuotaDataCommon },
-  };
+  } as ProviderQuotaChannel;
 }
 
 function parseChannelNode(node: QueryChannelNodeWithQuota): ProviderQuotaChannel {
@@ -852,10 +957,10 @@ export function useProviderQuotaStatuses() {
     .filter(hasProviderQuotaStatus)
     .filter((c) => {
       // Skip channels that have no credentials configured, since they cannot be
-      // checked and only add noise to the quota popover. Other errors are still
-      // shown so admins can spot credential/permission issues.
-      const quotaData = c.providerQuotaStatus.quotaData as { error?: string } | undefined;
-      return quotaData?.error !== 'channel has no credentials';
+      // checked and only add noise to the quota popover. Other failures remain
+      // available with their generic status for administrators to inspect.
+      const quotaData = c.providerQuotaStatus.quotaData as { error?: string; error_code?: string } | undefined;
+      return quotaData?.error_code !== 'missing_credentials' && quotaData?.error !== 'channel has no credentials';
     })
     .map(parseChannelNode);
 
