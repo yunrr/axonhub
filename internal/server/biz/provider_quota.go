@@ -82,6 +82,8 @@ var providerQuotaChannelTypes = []channel.Type{
 	channel.TypeZhipuAnthropic,
 	channel.TypeCommandcode,
 	channel.TypeCommandcodeAnthropic,
+	channel.TypeOllama,
+	channel.TypeOllamaAnthropic,
 }
 
 // quotaErrorBackoff returns the next-check delay after `failures` consecutive
@@ -428,6 +430,7 @@ func (svc *ProviderQuotaService) registerProviderQuotaSupport() {
 	svc.registerZhipuSupport()
 	svc.registerCharmHyperSupport()
 	svc.registerCommandCodeSupport()
+	svc.registerOllamaSupport()
 }
 
 func (svc *ProviderQuotaService) RegisterScheduledTasks(ctx context.Context, s *scheduler.Scheduler) error {
@@ -446,6 +449,10 @@ func (svc *ProviderQuotaService) registerClaudeCodeSupport() {
 
 func (svc *ProviderQuotaService) registerCommandCodeSupport() {
 	svc.checkers["commandcode"] = provider_quota.NewCommandCodeQuotaChecker(svc.httpClient)
+}
+
+func (svc *ProviderQuotaService) registerOllamaSupport() {
+	svc.checkers["ollama"] = provider_quota.NewOllamaQuotaChecker(svc.httpClient)
 }
 
 func (svc *ProviderQuotaService) registerCodexSupport() {
@@ -1298,6 +1305,8 @@ func (svc *ProviderQuotaService) getProviderType(ch *ent.Channel) string {
 		return "zhipu"
 	case channel.TypeCommandcode, channel.TypeCommandcodeAnthropic:
 		return "commandcode"
+	case channel.TypeOllama, channel.TypeOllamaAnthropic:
+		return "ollama"
 	default:
 		return ""
 	}
@@ -1342,6 +1351,17 @@ func hasCredentialsForProvider(ch *ent.Channel) bool {
 		}
 
 		_, err := provider_quota.NormalizeCommandCodeCookie(ch.Settings.ProviderQuota.CommandCode.AuthCookie)
+		return err == nil
+	}
+
+	if ch.Type == channel.TypeOllama || ch.Type == channel.TypeOllamaAnthropic {
+		// Ollama Cloud quota collection is authenticated with the account
+		// session cookie, never the inference API key.
+		if ch.Settings == nil || ch.Settings.ProviderQuota == nil || ch.Settings.ProviderQuota.Ollama == nil {
+			return false
+		}
+
+		_, err := provider_quota.NormalizeOllamaCookie(ch.Settings.ProviderQuota.Ollama.AuthCookie)
 		return err == nil
 	}
 
