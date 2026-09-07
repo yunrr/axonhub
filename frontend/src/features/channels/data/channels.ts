@@ -876,6 +876,13 @@ export const DEFAULT_CHANNEL_COLUMN_VISIBILITY: ChannelListColumnVisibility = {
   proxy: false,
 };
 
+const channelListColumnVisibilitySchema = z.record(z.string(), z.boolean());
+
+export function parseChannelColumnVisibility(value: unknown): ChannelListColumnVisibility {
+  const parsed = channelListColumnVisibilitySchema.safeParse(value);
+  return parsed.success ? { ...DEFAULT_CHANNEL_COLUMN_VISIBILITY, ...parsed.data } : DEFAULT_CHANNEL_COLUMN_VISIBILITY;
+}
+
 const CHANNEL_QUERY_FULL_NODE_SELECTION = `
           id
           createdAt
@@ -1029,6 +1036,7 @@ const CHANNEL_QUERY_FULL_NODE_SELECTION = `
             ready
             quotaData
             providerType
+            accountKey
           }
 `;
 
@@ -1091,6 +1099,7 @@ const CHANNEL_QUERY_QUOTA_SELECTION = `
             ready
             quotaData
             providerType
+            accountKey
           }
 `;
 
@@ -1217,6 +1226,8 @@ export function useQueryChannels(
     enabled: !options?.disableAutoFetch,
     queryKey: [
       'channels',
+      query,
+      queryInput,
       variables?.where,
       variables?.orderBy?.field,
       variables?.orderBy?.direction,
