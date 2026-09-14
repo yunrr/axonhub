@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { graphqlRequest } from '@/gql/graphql';
+import type { ChannelQuotaRoutingMode } from '@/features/channels/data/schema';
 
 const CHECK_PROVIDER_QUOTAS_QUERY = `
   mutation CheckProviderQuotas {
@@ -21,6 +22,9 @@ const PROVIDER_QUOTA_STATUSES_QUERY = `
           id
           name
           type
+          settings {
+            quotaRoutingMode
+          }
           providerQuotaStatus {
             status
             nextResetAt
@@ -633,6 +637,8 @@ export type ProviderQuotaChannel = {
   // Names of the channels sharing this account, only set on the representative
   // entry built by the quota popover grouping.
   sharedAccountNames?: string[];
+  // Quota routing mode declared on the channel settings; INHERIT defers to the global default.
+  quotaRoutingMode: ChannelQuotaRoutingMode;
   quotaStatus: {
     status: 'available' | 'warning' | 'exhausted' | 'unknown';
     nextResetAt: string | null;
@@ -707,7 +713,13 @@ export type ProviderQuotaChannel = {
       };
     }
   | {
-      type: 'zenmux' | 'zenmux_responses' | 'zenmux_anthropic' | 'zenmux_gemini';
+      type: 'zai' | 'zai_anthropic';
+      quotaStatus: {
+        quotaData: ProviderZhipuQuotaData;
+      };
+    }
+  | {
+      type: 'zenmux' | 'zenmux_responses' | 'zenmux_anthropic' | 'zenmux_gemini' | 'zenmux_video';
       quotaStatus: {
         quotaData: ProviderZenmuxQuotaData;
       };
@@ -781,6 +793,7 @@ type QueryChannelNode = {
   id: string;
   name: string;
   type: string;
+  settings: { quotaRoutingMode: ChannelQuotaRoutingMode } | null;
   providerQuotaStatus: ProviderQuotaStatusNode | null;
 };
 
@@ -807,6 +820,7 @@ function parseChannelNodeBase(node: QueryChannelNodeWithQuota): ProviderQuotaCha
   const base = {
     id: node.id,
     name: node.name,
+    quotaRoutingMode: node.settings?.quotaRoutingMode ?? 'INHERIT',
     accountKey: optionalString(quotaStatus.accountKey),
     quotaStatus: {
       status: quotaStatus.status,
@@ -816,10 +830,16 @@ function parseChannelNodeBase(node: QueryChannelNodeWithQuota): ProviderQuotaCha
     },
   };
 
-  if (node.type === 'zenmux' || node.type === 'zenmux_responses' || node.type === 'zenmux_anthropic' || node.type === 'zenmux_gemini') {
+  if (
+    node.type === 'zenmux' ||
+    node.type === 'zenmux_responses' ||
+    node.type === 'zenmux_anthropic' ||
+    node.type === 'zenmux_gemini' ||
+    node.type === 'zenmux_video'
+  ) {
     return {
       ...base,
-      type: node.type as 'zenmux' | 'zenmux_responses' | 'zenmux_anthropic' | 'zenmux_gemini',
+      type: node.type as 'zenmux' | 'zenmux_responses' | 'zenmux_anthropic' | 'zenmux_gemini' | 'zenmux_video',
       quotaStatus: { ...base.quotaStatus, quotaData: node.providerQuotaStatus.quotaData as ProviderZenmuxQuotaData },
     };
   }
@@ -894,6 +914,13 @@ function parseChannelNodeBase(node: QueryChannelNodeWithQuota): ProviderQuotaCha
     return {
       ...base,
       type: node.type as 'zhipu' | 'zhipu_anthropic',
+      quotaStatus: { ...base.quotaStatus, quotaData: node.providerQuotaStatus.quotaData as ProviderZhipuQuotaData },
+    };
+  }
+  if (node.type === 'zai' || node.type === 'zai_anthropic') {
+    return {
+      ...base,
+      type: node.type as 'zai' | 'zai_anthropic',
       quotaStatus: { ...base.quotaStatus, quotaData: node.providerQuotaStatus.quotaData as ProviderZhipuQuotaData },
     };
   }
