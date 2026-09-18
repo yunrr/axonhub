@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 
 	"github.com/looplj/axonhub/internal/authz"
@@ -70,6 +71,55 @@ func TestOpenAICompatibleChannel_BuildChannelWithOutbounds(t *testing.T) {
 	require.NotNil(t, videoOutbound)
 	_, ok = videoOutbound.(*openai.OutboundTransformer)
 	require.True(t, ok)
+}
+
+// TestOpenAICompatibleChannel_BuildsWithoutAPIKey guards keyless OpenAI-compatible
+// channels: saving such a channel and fetching its models already work without a key,
+// so building it must not demand one either. The channel test flow resolves the
+// channel through GetChannel, which is covered here, and the outbound sends no
+// Authorization header for an empty key.
+func TestOpenAICompatibleChannel_BuildsWithoutAPIKey(t *testing.T) {
+	client := enttest.NewEntClient(t, "sqlite3", "file:ent?mode=memory&_fk=0")
+	defer client.Close()
+
+	ctx := authz.WithTestBypass(context.Background())
+
+	entChannel := client.Channel.Create().
+		SetName("OpenAI Compatible No-Key Channel").
+		SetType(channel.TypeOpenai).
+		SetBaseURL("http://localhost:8080/v1").
+		SetCredentials(objects.ChannelCredentials{}).
+		SetSupportedModels([]string{"local-model"}).
+		SetDefaultTestModel("local-model").
+		SaveX(ctx)
+
+	channelSvc := NewChannelServiceForTest(client)
+
+	built, err := channelSvc.buildChannelWithOutbounds(entChannel)
+	require.NoError(t, err)
+	require.NotNil(t, built)
+
+	openAIOutbound, ok := built.Outbound.(*openai.OutboundTransformer)
+	require.True(t, ok)
+	require.NotNil(t, openAIOutbound.GetConfig().APIKeyProvider)
+	require.Empty(t, openAIOutbound.GetConfig().APIKeyProvider.Get(ctx))
+
+	tested, err := channelSvc.GetChannel(ctx, entChannel.ID)
+	require.NoError(t, err)
+	require.NotNil(t, tested.Outbound)
+
+	request, err := tested.Outbound.TransformRequest(ctx, &llm.Request{
+		Model: "local-model",
+		Messages: []llm.Message{{
+			Role:    "user",
+			Content: llm.MessageContent{Content: lo.ToPtr("ping")},
+		}},
+	})
+	require.NoError(t, err)
+
+	finalized, err := httpclient.FinalizeAuthHeaders(request)
+	require.NoError(t, err)
+	require.Empty(t, finalized.Headers.Get("Authorization"))
 }
 
 func TestAtlasCloudChannel_BuildChannelWithOutbounds(t *testing.T) {

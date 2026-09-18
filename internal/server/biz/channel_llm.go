@@ -630,9 +630,11 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 			return nil, fmt.Errorf("missing api key for channel %s", c.Name)
 		}
 	default:
-		if len(enabledKeys) == 0 {
-			return nil, fmt.Errorf("missing api key for channel %s", c.Name)
-		}
+		// Remaining channel types (OpenAI/Anthropic/Gemini-compatible relays,
+		// local gateways, ...) may be deployed without authentication, so a
+		// channel with no enabled key still builds: the outbound simply omits
+		// the Authorization header. This also covers the channel test flow,
+		// which passes an apiKeyOverride when one is supplied.
 	}
 
 	if c.BaseURL == "" {
