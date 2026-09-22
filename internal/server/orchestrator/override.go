@@ -185,6 +185,14 @@ func applyOverrideRequestBody(outbound *PersistentOutboundTransformer) pipeline.
 		renderCtx := buildRenderContext(llmReq, outbound.state.OriginalModel)
 		body := request.Body
 
+		// The outbound body is produced by format transformation, so a field the client
+		// sent may not survive it. set_if_absent also consults the original inbound body
+		// so such a field still counts as present (see applyBodySetIfAbsent).
+		var originalBody []byte
+		if llmReq.RawRequest != nil && gjson.ValidBytes(llmReq.RawRequest.Body) {
+			originalBody = llmReq.RawRequest.Body
+		}
+
 		for _, op := range ops {
 			if strings.EqualFold(op.Path, "stream") {
 				log.Warn(ctx, "stream override parameter ignored",
@@ -197,7 +205,7 @@ func applyOverrideRequestBody(outbound *PersistentOutboundTransformer) pipeline.
 
 			var err error
 
-			body, err = applyBodyOperation(ctx, body, op, renderCtx)
+			body, err = applyBodyOperation(ctx, body, op, renderCtx, originalBody)
 			if err != nil {
 				log.Warn(ctx, "failed to apply override operation",
 					log.String("channel", channel.Name),
@@ -271,6 +279,7 @@ func applyBodyOperation(
 	body []byte,
 	op objects.OverrideOperation,
 	renderCtx RenderContext,
+	originalBody []byte,
 ) ([]byte, error) {
 	if !evaluateCondition(ctx, op.Condition, renderCtx) {
 		return body, nil
@@ -280,7 +289,7 @@ func applyBodyOperation(
 	case objects.OverrideOpSet:
 		return applyBodySet(ctx, body, op, renderCtx)
 	case objects.OverrideOpSetIfAbsent:
-		return applyBodySetIfAbsent(ctx, body, op, renderCtx)
+		return applyBodySetIfAbsent(ctx, body, op, renderCtx, originalBody)
 	case objects.OverrideOpDelete:
 		return applyBodyDelete(body, op)
 	case objects.OverrideOpRename:
@@ -324,10 +333,22 @@ func applyBodySetIfAbsent(
 	body []byte,
 	op objects.OverrideOperation,
 	renderCtx RenderContext,
+	originalBody []byte,
 ) ([]byte, error) {
 	existing := gjson.GetBytes(body, op.Path)
 	if existing.Exists() || existing.Raw == "null" {
 		return body, nil
+	}
+
+	// A field the client sent may have been dropped or remapped by format
+	// transformation, so it can be absent from the outbound body even though the
+	// client provided it. Treat a field present in the original inbound body as
+	// present, keeping set_if_absent a default that clients can override.
+	if len(originalBody) > 0 {
+		original := gjson.GetBytes(originalBody, op.Path)
+		if original.Exists() || original.Raw == "null" {
+			return body, nil
+		}
 	}
 
 	return applyBodySet(ctx, body, op, renderCtx)
