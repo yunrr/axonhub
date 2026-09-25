@@ -173,3 +173,8 @@ config.schema.json
 axonhub.exe
 .omx/
 deploy_dev.sh
+
+docs/superpowers/
+docs/superpowers/**
+superpowers/
+superpowers/**
