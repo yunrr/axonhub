@@ -3,6 +3,7 @@ package biz
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/looplj/axonhub/internal/ent/channel"
 	"github.com/looplj/axonhub/internal/objects"
 	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/looplj/axonhub/llm/oauth"
 	"github.com/looplj/axonhub/llm/transformer/anthropic/claudecode"
 	"github.com/looplj/axonhub/llm/transformer/antigravity"
 	"github.com/looplj/axonhub/llm/transformer/cline"
@@ -631,15 +633,46 @@ func fetchModels(
 }
 
 func (f *ModelFetcher) prepareCodexModelsRequest(ctx context.Context, ch *ent.Channel, client *httpclient.HttpClient) (*httpclient.Request, error) {
-	creds, err := ch.Credentials.ResolveOAuthCredentials()
+	creds, entryRef, err := resolveCodexCatalogCredentials(ch)
 	if err != nil {
 		return nil, err
 	}
 	params := codex.TokenProviderParams{Credentials: creds, HTTPClient: client}
 	if ch.ID != 0 {
-		params.OnRefreshed = f.channelService.onTokenRefreshed(ch)
+		if entryRef != "" {
+			params.OnRefreshed = f.channelService.onOAuthEntryRefreshed(ch, entryRef)
+		} else {
+			params.OnRefreshed = f.channelService.onTokenRefreshed(ch)
+		}
+	} else if creds.IsExpired(time.Now()) {
+		// Refreshing rotates the refresh token; an ephemeral channel has
+		// nowhere to persist the refreshed credentials, so the user's stored
+		// auth.json would be left holding a dead refresh token.
+		return nil, errors.New("codex oauth access token is expired; save the channel before fetching models so refreshed credentials can be persisted")
 	}
 	return codex.ModelsRequest(ctx, codex.NewTokenProvider(params), ch.BaseURL)
+}
+
+// resolveCodexCatalogCredentials picks the OAuth credential used to call the
+// official Codex catalog, together with the named entry it belongs to ("" when
+// it is not one of the channel's named entries). Named multi-credential
+// channels — the layout produced by the auth.json import flow — only resolve
+// through GetAllOAuthCredentials; ResolveOAuthCredentials alone would fail for
+// them. A raw pasted Codex CLI auth.json nests the tokens under "tokens",
+// which the generic OAuth parsing does not understand either.
+func resolveCodexCatalogCredentials(ch *ent.Channel) (*oauth.OAuthCredentials, string, error) {
+	creds := &ch.Credentials
+	if entries := creds.GetAllOAuthCredentials(); len(entries) > 0 && entries[0].Credentials != nil {
+		return entries[0].Credentials, entries[0].ID, nil
+	}
+	if decoded, err := codex.DecodeAuthJSON(creds.APIKey); err == nil {
+		return decoded, "", nil
+	}
+	parsed, err := creds.ResolveOAuthCredentials()
+	if err != nil {
+		return nil, "", err
+	}
+	return parsed, "", nil
 }
 
 func parseCodexModels(body []byte) ([]ModelIdentify, error) {

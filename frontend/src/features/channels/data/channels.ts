@@ -967,6 +967,7 @@ const FETCH_MODELS_QUERY = `
         id
       }
       error
+      fallback
     }
   }
 `;
@@ -2240,6 +2241,7 @@ export function useFetchModels() {
           fetchModels: {
             models: Array<{ id: string }>;
             error?: string | null;
+            fallback?: boolean | null;
           };
         }>(FETCH_MODELS_QUERY, { input });
         return data.fetchModels;
@@ -2251,6 +2253,8 @@ export function useFetchModels() {
     onSuccess: (data) => {
       if (data.error) {
         toast.error(t('common.errors.internalServerError'));
+      } else if (data.fallback) {
+        toast.warning(t('channels.messages.fetchModelsFallback'));
       } else {
         const count = data.models.length;
         if (count > 100) {

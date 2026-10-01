@@ -664,6 +664,7 @@ input FetchModelsInput {
 type FetchModelsPayload {
   models: [ModelIdentify!]!
   error: String
+  fallback: Boolean
 }
 
 type ModelIdentify {

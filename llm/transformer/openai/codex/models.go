@@ -19,7 +19,7 @@ func SupportsModelCatalog(baseURL string) bool {
 		return true
 	}
 	parsed, err := url.Parse(strings.TrimRight(baseURL, "#"))
-	return err == nil && parsed.Scheme == "https" && parsed.Host == "chatgpt.com" &&
+	return err == nil && parsed.Scheme == "https" && strings.EqualFold(parsed.Host, "chatgpt.com") &&
 		strings.TrimRight(parsed.Path, "/") == "/backend-api/codex"
 }
 

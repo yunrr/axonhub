@@ -199,6 +199,7 @@
   "channels.messages.duplicateMappingWarning": "检测到重复的映射，请在保存前删除重复的映射。",
   "channels.messages.fetchModelsSuccess": "成功获取 {{count}} 个模型",
   "channels.messages.fetchModelsSuccessLarge": "成功获取 {{count}} 个模型。使用搜索查找特定模型。",
+  "channels.messages.fetchModelsFallback": "无法获取实时模型列表，已显示内置默认模型。",
   "channels.messages.modelsNotConfirmed": "您已选择了模型但未确认，请先点击\"确定选中\"按钮确认选择的模型，或取消选择后再保存。",
   "channels.messages.batchCreateSuccess": "成功创建 {{count}} 个渠道",
   "channels.messages.errorResolvedSuccess": "渠道错误解决成功",

@@ -316,8 +316,9 @@ type FastestModel struct {
 }
 
 type FetchModelsPayload struct {
-	Models []*biz.ModelIdentify `json:"models"`
-	Error  *string              `json:"error,omitempty"`
+	Models   []*biz.ModelIdentify `json:"models"`
+	Error    *string              `json:"error,omitempty"`
+	Fallback *bool                `json:"fallback,omitempty"`
 }
 
 type GetCacheDiagnosticsInput struct {

@@ -775,8 +775,9 @@ type ComplexityRoot struct {
 	}
 
 	FetchModelsPayload struct {
-		Error  func(childComplexity int) int
-		Models func(childComplexity int) int
+		Error    func(childComplexity int) int
+		Fallback func(childComplexity int) int
+		Models   func(childComplexity int) int
 	}
 
 	FilterCondition struct {
@@ -5163,6 +5164,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.FetchModelsPayload.Error(childComplexity), true
+	case "FetchModelsPayload.fallback":
+		if e.complexity.FetchModelsPayload.Fallback == nil {
+			break
+		}
+
+		return e.complexity.FetchModelsPayload.Fallback(childComplexity), true
 	case "FetchModelsPayload.models":
 		if e.complexity.FetchModelsPayload.Models == nil {
 			break
@@ -29253,6 +29260,35 @@ func (ec *executionContext) fieldContext_FetchModelsPayload_error(_ context.Cont
 	return fc, nil
 }
 
+func (ec *executionContext) _FetchModelsPayload_fallback(ctx context.Context, field graphql.CollectedField, obj *FetchModelsPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FetchModelsPayload_fallback,
+		func(ctx context.Context) (any, error) {
+			return obj.Fallback, nil
+		},
+		nil,
+		ec.marshalOBoolean2ᚖbool,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_FetchModelsPayload_fallback(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FetchModelsPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _FilterCondition_type(ctx context.Context, field graphql.CollectedField, obj *objects.Condition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -48372,6 +48408,8 @@ func (ec *executionContext) fieldContext_Query_fetchModels(ctx context.Context, 
 				return ec.fieldContext_FetchModelsPayload_models(ctx, field)
 			case "error":
 				return ec.fieldContext_FetchModelsPayload_error(ctx, field)
+			case "fallback":
+				return ec.fieldContext_FetchModelsPayload_fallback(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type FetchModelsPayload", field.Name)
 		},
@@ -98438,6 +98476,8 @@ func (ec *executionContext) _FetchModelsPayload(ctx context.Context, sel ast.Sel
 			}
 		case "error":
 			out.Values[i] = ec._FetchModelsPayload_error(ctx, field, obj)
+		case "fallback":
+			out.Values[i] = ec._FetchModelsPayload_fallback(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

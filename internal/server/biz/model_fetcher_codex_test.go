@@ -138,6 +138,117 @@ func TestModelFetcher_CodexStoredCredentialReplacement(t *testing.T) {
 	}
 }
 
+func TestModelFetcher_CodexCatalogNamedOAuthEntries(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		expiresAt       time.Time
+		refreshResponse string
+		wantToken       string
+	}{
+		{"valid entry token", time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), "", "entry-token"},
+		{"expired entry token is refreshed and persisted", time.Now().Add(-time.Hour),
+			`{"access_token":"refreshed-token","refresh_token":"rotated-token","token_type":"bearer","expires_in":3600}`,
+			"refreshed-token"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := authz.WithSystemBypass(t.Context(), "test-model-fetch")
+			db := enttest.NewEntClient(t, "sqlite3", "file:"+url.QueryEscape(t.Name())+"?mode=memory&_fk=0")
+			defer db.Close()
+
+			credentials := objects.ChannelCredentials{OAuths: []objects.NamedOAuthCredentials{{
+				ID:   "sub-1",
+				Name: "primary",
+				Credentials: &objects.OAuthCredentials{
+					AccessToken:  "entry-token",
+					RefreshToken: "entry-refresh",
+					ExpiresAt:    tt.expiresAt,
+				},
+			}}}
+			ch, err := db.Channel.Create().SetName("named-entry-codex").SetType(channel.TypeCodex).
+				SetBaseURL("https://chatgpt.com/backend-api/codex#").SetCredentials(credentials).
+				SetSupportedModels([]string{"existing"}).SetDefaultTestModel("existing").Save(ctx)
+			require.NoError(t, err)
+
+			calls := 0
+			client := httpclient.NewHttpClientWithClient(&http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if req.URL.Host == "auth.openai.com" {
+					require.Equal(t, "https://auth.openai.com/oauth/token", req.URL.String())
+					require.Equal(t, http.MethodPost, req.Method)
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(tt.refreshResponse))}, nil
+				}
+				require.Equal(t, "https://chatgpt.com/backend-api/codex/models", req.URL.Scheme+"://"+req.URL.Host+req.URL.Path)
+				require.NotEmpty(t, req.URL.Query().Get("client_version"))
+				require.Equal(t, "Bearer "+tt.wantToken, req.Header.Get("Authorization"))
+				body := `{"models":[{"slug":"entry-model","visibility":"list"}]}`
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			})})
+			fetcher := NewModelFetcher(client, &ChannelService{AbstractService: &AbstractService{db: db}, httpClient: client})
+			result, err := fetcher.FetchModels(ctx, FetchModelsInput{
+				ChannelType: channel.TypeCodex.String(), BaseURL: ch.BaseURL, ChannelID: &ch.ID,
+			})
+			require.NoError(t, err)
+			require.Nil(t, result.Error)
+			require.False(t, result.Fallback)
+			require.Equal(t, []ModelIdentify{{ID: "entry-model"}}, result.Models)
+
+			if tt.refreshResponse == "" {
+				require.Equal(t, 1, calls)
+				return
+			}
+			// The rotated refresh token must be persisted back into the named entry.
+			require.Equal(t, 2, calls)
+			saved, err := db.Channel.Get(ctx, ch.ID)
+			require.NoError(t, err)
+			require.Len(t, saved.Credentials.OAuths, 1)
+			require.Equal(t, "sub-1", saved.Credentials.OAuths[0].ID)
+			require.Equal(t, "primary", saved.Credentials.OAuths[0].Name)
+			require.Equal(t, "refreshed-token", saved.Credentials.OAuths[0].Credentials.AccessToken)
+			require.Equal(t, "rotated-token", saved.Credentials.OAuths[0].Credentials.RefreshToken)
+		})
+	}
+}
+
+func TestModelFetcher_CodexEphemeralExpiredCredentials(t *testing.T) {
+	// Refreshing rotates the refresh token; an ephemeral channel has nowhere to
+	// persist it, so the fetch must refuse to refresh and fall back instead of
+	// burning the user's refresh token.
+	calls := 0
+	client := httpclient.NewHttpClientWithClient(&http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	})})
+	key := `{"access_token":"expired-token","refresh_token":"some-refresh","expires_at":"2020-01-01T00:00:00Z"}`
+	result, err := NewModelFetcher(client, nil).FetchModels(t.Context(), FetchModelsInput{
+		ChannelType: channel.TypeCodex.String(), BaseURL: "https://chatgpt.com/backend-api/codex#", APIKey: &key,
+	})
+	require.NoError(t, err)
+	require.Zero(t, calls)
+	require.True(t, result.Fallback)
+	require.Len(t, result.Models, len(codex.DefaultModels()))
+}
+
+func TestModelFetcher_CodexRawCLIAuthJSON(t *testing.T) {
+	// The raw Codex CLI auth.json nests the tokens under "tokens"; the fetch
+	// must decode that shape instead of silently falling back.
+	calls := 0
+	client := httpclient.NewHttpClientWithClient(&http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		require.Equal(t, "Bearer cli-token", req.Header.Get("Authorization"))
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"models":[{"slug":"cli-model","visibility":"list"}]}`))}, nil
+	})})
+	key := `{"OPENAI_API_KEY":null,"tokens":{"access_token":"cli-token","refresh_token":"cli-refresh"},"last_refresh":"` +
+		time.Now().Add(-time.Minute).Format(time.RFC3339Nano) + `"}`
+	result, err := NewModelFetcher(client, nil).FetchModels(t.Context(), FetchModelsInput{
+		ChannelType: channel.TypeCodex.String(), BaseURL: "https://chatgpt.com/backend-api/codex#", APIKey: &key,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+	require.Nil(t, result.Error)
+	require.False(t, result.Fallback)
+	require.Equal(t, []ModelIdentify{{ID: "cli-model"}}, result.Models)
+}
+
 func TestModelFetcher_CodexRelayModels(t *testing.T) {
 	calls := 0
 	client := httpclient.NewHttpClientWithClient(&http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
