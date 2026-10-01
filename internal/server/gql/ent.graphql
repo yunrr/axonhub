@@ -1313,6 +1313,7 @@ enum ChannelType @goModel(model: "github.com/looplj/axonhub/internal/ent/channel
   burncloud
   modelscope
   bailian
+  bailian_responses
   bailian_anthropic
   moonshot_coding
   jina
@@ -4644,6 +4645,10 @@ type RequestExecution implements Node {
   projectID: Int!
   requestID: ID!
   channelID: ID
+  """
+  1-based position of the channel API key used for this execution
+  """
+  channelAPIKeyIndex: Int @goField(forceResolver: true)
   """
   Data Storage ID that this request belongs to
   """

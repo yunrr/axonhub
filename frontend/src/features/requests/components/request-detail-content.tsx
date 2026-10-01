@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { JsonViewer } from '@/components/json-tree-view';
 import { useGeneralSettings } from '@/features/system/data/system';
 import { getTokenFromStorage } from '@/stores/authStore';
+import { ensureFreshAccessToken } from '@/lib/auth-session';
 import { useUsageLogs } from '../data/usage-logs';
 import { type Request, useRequest, useRequestExecutions } from '../data';
 import { ChunksDialog } from './chunks-dialog';
@@ -162,7 +163,7 @@ export function RequestDetailContent({ requestId, projectId, previewRequest, isP
     const requestIdNumber = extractNumberID(request.id);
     if (!requestIdNumber) return null;
 
-    const token = getTokenFromStorage();
+    const token = await ensureFreshAccessToken();
     if (!token) {
       toast.error(t('common.errors.sessionExpiredSignIn'));
       return null;
@@ -832,11 +833,16 @@ export function RequestDetailContent({ requestId, projectId, previewRequest, isP
                               <p className='text-muted-foreground font-mono text-sm'>
                                 {execution.channel?.name || t('requests.columns.unknown')}
                               </p>
-                              {execution.channelAPIKeySuffix && (
+                              {(execution.channelAPIKeySuffix || execution.channelAPIKeyIndex != null) && (
                                 <div className='flex items-center gap-1.5 text-xs text-muted-foreground pt-0.5'>
                                   <Key className='h-3.5 w-3.5 shrink-0' />
                                   <span>{t('requests.columns.upstreamApiKey')}</span>
-                                  <span className='font-mono'>••••{execution.channelAPIKeySuffix}</span>
+                                  {execution.channelAPIKeyIndex != null && (
+                                    <span className='font-mono'>key{execution.channelAPIKeyIndex}</span>
+                                  )}
+                                  {execution.channelAPIKeySuffix && (
+                                    <span className='font-mono'>••••{execution.channelAPIKeySuffix}</span>
+                                  )}
                                 </div>
                               )}
                             </div>

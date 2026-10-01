@@ -101,6 +101,8 @@ func (handlers *ChatCompletionHandlers) ChatCompletionWithRequest(c *gin.Context
 		return
 	}
 
+	writeForwardResponseHeaders(c, genericReq, result)
+
 	if result.ChatCompletion != nil {
 		resp := result.ChatCompletion
 		copyCodexTurnStateHeader(c.Writer.Header(), resp.Headers)
@@ -138,6 +140,21 @@ func (handlers *ChatCompletionHandlers) ChatCompletionWithRequest(c *gin.Context
 
 		writeSSEStream(c, stream, FormatStreamError, handlers.sseKeepAlive, handlers.sseHeartbeatFormat)
 	}
+}
+
+func writeForwardResponseHeaders(c *gin.Context, request *httpclient.Request, result orchestrator.ChatCompletionResult) {
+	if !result.CodexResponseHeadersSupported || request == nil || !strings.HasSuffix(request.Path, "/responses") || codex.GetSessionIDFromHeaders(request.Headers) == "" {
+		return
+	}
+
+	var headers http.Header
+	if result.ChatCompletion != nil {
+		headers = result.ChatCompletion.Headers
+	} else {
+		headers = httpclient.GetResponseHeaders(result.ChatCompletionStream)
+	}
+
+	_ = httpclient.MergeForwardResponseHeaders(c.Writer.Header(), headers)
 }
 
 func copyCodexTurnStateHeader(dst, src http.Header) {
@@ -424,17 +441,6 @@ func writeSSEStreamEnd(
 	clientDisconnected *bool,
 ) {
 	switch {
-	case terminalSeen:
-		if streamErr != nil {
-			log.Warn(ctx, "Stream error after terminal event was delivered, suppressing trailing error event",
-				log.Cause(streamErr))
-		}
-	case errors.Is(ctx.Err(), context.Canceled):
-		*clientDisconnected = true
-
-		if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
-			log.Warn(ctx, "Stream error after client disconnected", log.Cause(streamErr))
-		}
 	case errors.Is(ctx.Err(), context.DeadlineExceeded) &&
 		(streamErr == nil || errors.Is(streamErr, context.Canceled) || errors.Is(streamErr, context.DeadlineExceeded)):
 		streamErr = ctx.Err()
@@ -444,12 +450,29 @@ func writeSSEStreamEnd(
 			log.Warn(ctx, "Failed to write SSE deadline error", log.Cause(err))
 		}
 	case streamErr != nil:
-		log.Error(ctx, "Error in stream", log.Cause(streamErr))
-		if err := writeSSEErrorEvent(ctx, c.Writer, formatErr, streamErr); err != nil {
+		if errors.Is(streamErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 			*clientDisconnected = true
-			log.Warn(ctx, "Failed to write SSE stream error", log.Cause(err))
+
+			if !errors.Is(streamErr, context.Canceled) {
+				log.Warn(ctx, "Stream error after client disconnected", log.Cause(streamErr))
+			}
+		} else if terminalSeen {
+			log.Warn(ctx, "Stream error after terminal event was delivered, suppressing trailing error event",
+				log.Cause(streamErr))
+		} else {
+			log.Error(ctx, "Error in stream", log.Cause(streamErr))
+			if err := writeSSEErrorEvent(ctx, c.Writer, formatErr, streamErr); err != nil {
+				*clientDisconnected = true
+				log.Warn(ctx, "Failed to write SSE stream error", log.Cause(err))
+			}
 		}
-	default:
+	case errors.Is(ctx.Err(), context.Canceled):
+		*clientDisconnected = true
+
+		if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
+			log.Warn(ctx, "Stream error after client disconnected", log.Cause(streamErr))
+		}
+	case !terminalSeen:
 		log.Error(ctx, "Stream ended without terminal event, reporting incomplete stream to client",
 			log.Cause(orchestrator.ErrStreamIncomplete))
 		if err := writeSSEErrorEvent(ctx, c.Writer, formatErr, orchestrator.ErrStreamIncomplete); err != nil {

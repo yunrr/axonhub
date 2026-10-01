@@ -909,6 +909,43 @@ func TestShouldForceStreamingForCandidate(t *testing.T) {
 	})
 }
 
+func TestPersistentOutboundTransformer_TransformRequest_PreservesNonStreaming(t *testing.T) {
+	outbound, err := anthropic.NewOutboundTransformer("https://api.example.com", "test-api-key")
+	require.NoError(t, err)
+
+	channel := &biz.Channel{
+		Channel:  &ent.Channel{ID: 1, Name: "custom-anthropic"},
+		Outbound: outbound,
+		Outbounds: map[string]transformer.Outbound{
+			llm.APIFormatAnthropicMessage.String(): outbound,
+		},
+	}
+	processor := &PersistentOutboundTransformer{
+		wrapped: outbound,
+		state: &PersistenceState{
+			OriginalModel: "MiniMax-M2.7",
+			ChannelModelsCandidates: []*ChannelModelsCandidate{{
+				Channel:   channel,
+				Models:    []biz.ChannelModelEntry{{RequestModel: "MiniMax-M2.7", ActualModel: "MiniMax-M2.7"}},
+				APIFormat: llm.APIFormatAnthropicMessage.String(),
+			}},
+		},
+	}
+	request := &llm.Request{
+		Model:     "MiniMax-M2.7",
+		APIFormat: llm.APIFormatAnthropicMessage,
+		Messages: []llm.Message{{
+			Role:    "user",
+			Content: llm.MessageContent{Content: lo.ToPtr("Hi")},
+		}},
+	}
+
+	httpRequest, err := processor.TransformRequest(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, gjson.GetBytes(httpRequest.Body, "stream").Exists())
+	require.False(t, gjson.GetBytes(httpRequest.Body, "stream").Bool())
+}
+
 func TestIsCompletedAggregatedOutboundResponse(t *testing.T) {
 	t.Run("usage with completion tokens means completed", func(t *testing.T) {
 		require.True(t, isCompletedAggregated(llm.ResponseMeta{Usage: &llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}}))
@@ -968,6 +1005,9 @@ func (s *sliceEventStream) Close() error {
 	return nil
 }
 
+// TestOutboundPersistentStream_Close_AggregatedResponsesCompletionHandling
+// verifies that aggregated Responses chunks and terminal events produce the
+// correct request execution completion status.
 func TestOutboundPersistentStream_Close_AggregatedResponsesCompletionHandling(t *testing.T) {
 	ctx := context.Background()
 	ctx = authz.WithTestBypass(ctx)
@@ -1036,6 +1076,63 @@ func TestOutboundPersistentStream_Close_AggregatedResponsesCompletionHandling(t 
 
 		// Incomplete streams must still persist buffered chunks for debugging.
 		require.Len(t, dbExec.ResponseChunks, 1, "failed execution should keep response_chunks in DB")
+	})
+	t.Run("response failure terminal is not completed", func(t *testing.T) {
+		client := enttest.NewEntClient(t, "sqlite3", "file:ent?mode=memory&_fk=0")
+		defer client.Close()
+
+		ctx := ent.NewContext(ctx, client)
+		project := createTestProject(t, ctx, client)
+		ch := createTestChannel(t, ctx, client)
+		_, requestService, _, usageLogService := setupTestServices(t, client)
+
+		req, err := client.Request.Create().
+			SetProjectID(project.ID).
+			SetChannelID(ch.ID).
+			SetModelID("gpt-4.1").
+			SetStatus(request.StatusPending).
+			SetRequestBody([]byte(`{"stream":true}`)).
+			Save(ctx)
+		require.NoError(t, err)
+
+		exec, err := client.RequestExecution.Create().
+			SetRequestID(req.ID).
+			SetProjectID(project.ID).
+			SetChannelID(ch.ID).
+			SetModelID("gpt-4.1").
+			SetRequestBody([]byte(`{"stream":true}`)).
+			SetFormat("openai/responses").
+			SetStatus(requestexecution.StatusPending).
+			SetStream(true).
+			Save(ctx)
+		require.NoError(t, err)
+
+		stream := &sliceEventStream{
+			events: []*httpclient.StreamEvent{{
+				Type: "response.failed",
+				Data: []byte(`{"type":"response.failed","response":{"id":"resp_failed","status":"failed"}}`),
+			}},
+		}
+		transformer := &mockTransformer{
+			apiFormat:          llm.APIFormatOpenAIResponse,
+			aggregatedResponse: []byte(`{"id":"resp_failed","status":"completed"}`),
+			aggregatedMeta: llm.ResponseMeta{
+				ID:    "resp_failed",
+				Usage: &llm.Usage{CompletionTokens: 1},
+			},
+		}
+		state := &PersistenceState{}
+
+		persistentStream := NewOutboundPersistentStream(ctx, stream, req, exec, requestService, usageLogService, transformer, nil, state)
+		require.True(t, persistentStream.Next())
+		_ = persistentStream.Current()
+		require.False(t, state.StreamCompleted)
+		require.NoError(t, persistentStream.Close())
+
+		dbExec, err := client.RequestExecution.Get(ctx, exec.ID)
+		require.NoError(t, err)
+		require.Equal(t, requestexecution.StatusFailed, dbExec.Status)
+		require.NotEqual(t, requestexecution.StatusCompleted, dbExec.Status)
 	})
 
 	t.Run("aggregated completed response without terminal event is completed", func(t *testing.T) {
@@ -1225,6 +1322,62 @@ func TestOutboundPersistentStream_Close_AggregatedResponsesCompletionHandling(t 
 		require.Empty(t, dbExec.ErrorMessage)
 		require.JSONEq(t, string(aggregated), string(dbExec.ResponseBody))
 	})
+}
+
+func TestOutboundPersistentStream_Close_AnthropicStopReasonAfterStreamErrorCompletesExecution(t *testing.T) {
+	ctx := authz.WithTestBypass(context.Background())
+	client := enttest.NewEntClient(t, "sqlite3", "file:ent?mode=memory&_fk=0")
+	defer client.Close()
+
+	ctx = ent.NewContext(ctx, client)
+	project := createTestProject(t, ctx, client)
+	ch := createTestChannel(t, ctx, client)
+	_, requestService, _, usageLogService := setupTestServices(t, client)
+	req, err := client.Request.Create().
+		SetProjectID(project.ID).
+		SetChannelID(ch.ID).
+		SetModelID("claude-opus-5-5").
+		SetStatus(request.StatusPending).
+		SetRequestBody([]byte(`{"stream":true}`)).
+		Save(ctx)
+	require.NoError(t, err)
+	exec, err := client.RequestExecution.Create().
+		SetRequestID(req.ID).
+		SetProjectID(project.ID).
+		SetChannelID(ch.ID).
+		SetModelID("claude-opus-5-5").
+		SetRequestBody([]byte(`{"stream":true}`)).
+		SetFormat("anthropic/messages").
+		SetStatus(requestexecution.StatusPending).
+		SetStream(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	stream := &sliceEventStream{
+		events: []*httpclient.StreamEvent{
+			{Data: []byte(`{"type":"message_start","message":{"id":"msg_stop","type":"message","role":"assistant","content":[],"model":"claude-opus-5-5"}}`)},
+			{Data: []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}`)},
+			{Data: []byte(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":1}}`)},
+		},
+		err: io.ErrUnexpectedEOF,
+	}
+	outbound, err := anthropic.NewOutboundTransformer("https://api.anthropic.com", "test-key")
+	require.NoError(t, err)
+	state := &PersistenceState{}
+	persistentStream := NewOutboundPersistentStream(ctx, stream, req, exec, requestService, usageLogService, outbound, nil, state)
+
+	for persistentStream.Next() {
+		_ = persistentStream.Current()
+	}
+	require.ErrorIs(t, persistentStream.Err(), io.ErrUnexpectedEOF)
+	require.NoError(t, persistentStream.Close())
+
+	savedExec, err := client.RequestExecution.Get(ctx, exec.ID)
+	require.NoError(t, err)
+	require.Equal(t, requestexecution.StatusCompleted, savedExec.Status)
+	require.Equal(t, "msg_stop", savedExec.ExternalID)
+	require.Contains(t, string(savedExec.ResponseBody), `"stop_reason":"end_turn"`)
+	require.True(t, state.StreamCompleted)
 }
 
 func TestOutboundPersistentStream_Close_ResponsesTerminalPersistsOutcome(t *testing.T) {
