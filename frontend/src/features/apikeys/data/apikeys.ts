@@ -142,8 +142,8 @@ function buildCreateApiKeyMutation(permissions: { canViewUsers: boolean }) {
     : '';
 
   return `
-    mutation CreateAPIKey($input: CreateAPIKeyInput!) {
-      createAPIKey(input: $input) {
+    mutation CreateAPIKey($input: CreateAPIKeyInput!, $key: String) {
+      createAPIKey(input: $input, key: $key) {
         id
         createdAt
         updatedAt${userFields}
@@ -251,8 +251,8 @@ const BULK_ARCHIVE_APIKEYS_MUTATION = `
 `;
 
 const ROTATE_APIKEY_MUTATION = `
-  mutation RotateAPIKey($id: ID!) {
-    rotateAPIKey(id: $id) {
+  mutation RotateAPIKey($id: ID!, $key: String) {
+    rotateAPIKey(id: $id, key: $key) {
       id
       key
       name
@@ -262,6 +262,12 @@ const ROTATE_APIKEY_MUTATION = `
       createdAt
       updatedAt
     }
+  }
+`;
+
+const DELETE_APIKEY_MUTATION = `
+  mutation DeleteAPIKey($id: ID!) {
+    deleteAPIKey(id: $id)
   }
 `;
 
@@ -672,7 +678,7 @@ export function useCreateApiKey() {
   const { handleError } = useErrorHandler();
 
   return useMutation({
-    mutationFn: (input: CreateApiKeyInput) => {
+    mutationFn: ({ input, key }: { input: CreateApiKeyInput; key?: string }) => {
       const mutation = buildCreateApiKeyMutation(permissions);
       // Automatically add projectID if not provided and a project is selected
       const inputWithProject = {
@@ -680,7 +686,7 @@ export function useCreateApiKey() {
         projectID: input.projectID ?? (selectedProjectId ? selectedProjectId : undefined),
       };
       const headers = selectedProjectId ? { 'X-Project-ID': selectedProjectId } : undefined;
-      return graphqlRequest<{ createAPIKey: ApiKey }>(mutation, { input: inputWithProject }, headers);
+      return graphqlRequest<{ createAPIKey: ApiKey }>(mutation, { input: inputWithProject, key }, headers);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['apiKeys'] });
@@ -839,18 +845,38 @@ export function useRotateApiKey() {
   const { handleError } = useErrorHandler();
 
   return useMutation({
-    mutationFn: async (id: string) => {
+    mutationFn: async ({ id, key }: { id: string; key?: string }) => {
       const headers = selectedProjectId ? { 'X-Project-ID': selectedProjectId } : undefined;
-      const data = await graphqlRequest<{ rotateAPIKey: ApiKey }>(ROTATE_APIKEY_MUTATION, { id }, headers);
+      const data = await graphqlRequest<{ rotateAPIKey: ApiKey }>(ROTATE_APIKEY_MUTATION, { id, key }, headers);
       return apiKeySchema.parse(data.rotateAPIKey);
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['apiKeys'] });
-      queryClient.invalidateQueries({ queryKey: ['apiKey', variables] });
+      queryClient.invalidateQueries({ queryKey: ['apiKey', variables.id] });
       toast.success(t('apikeys.messages.rotateSuccess'));
     },
     onError: (error) => {
       handleError(error, { context: t('apikeys.dialogs.rotate.title') });
+    },
+  });
+}
+
+export function useDeleteApiKey() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const { handleError } = useErrorHandler();
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const data = await graphqlRequest<{ deleteAPIKey: boolean }>(DELETE_APIKEY_MUTATION, { id });
+      return data.deleteAPIKey;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['apiKeys'] });
+      toast.success(t('apikeys.messages.deleteSuccess'));
+    },
+    onError: (error) => {
+      handleError(error, { context: t('apikeys.dialogs.delete.title') });
     },
   });
 }

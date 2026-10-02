@@ -9,7 +9,7 @@ import { ApiKeysCreateDialog } from './apikeys-create-dialog';
 import { ApiKeysEditDialog } from './apikeys-edit-dialog';
 import { ApiKeysProfileTemplatesDialog } from './apikeys-profile-templates-dialog';
 import { ApiKeyProfilesDialog } from './apikeys-profiles-dialog';
-// import { ApiKeysDeleteDialog } from './apikeys-delete-dialog'
+import { ApiKeysDeleteDialog } from './apikeys-delete-dialog'
 import { ApiKeysRotateDialog } from './apikeys-rotate-dialog';
 import { ApiKeysStatusDialog } from './apikeys-status-dialog';
 import { ApiKeysViewDialog } from './apikeys-view-dialog';
@@ -19,7 +19,7 @@ export function ApiKeysDialogs() {
     <>
       <ApiKeysCreateDialog />
       <ApiKeysEditDialog />
-      {/* <ApiKeysDeleteDialog /> */}
+      <ApiKeysDeleteDialog />
       <ApiKeysStatusDialog />
       <ApiKeysViewDialog />
       <ApiKeysArchiveDialog />

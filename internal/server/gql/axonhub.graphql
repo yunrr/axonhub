@@ -989,11 +989,12 @@ type Mutation {
     keys: [String!]!
   ): DeleteDisabledAPIKeysPayload!
 
-  createAPIKey(input: CreateAPIKeyInput!): APIKey!
+  createAPIKey(input: CreateAPIKeyInput!, key: String): APIKey!
   updateAPIKey(id: ID!, input: UpdateAPIKeyInput!): APIKey!
   updateAPIKeyStatus(id: ID!, status: APIKeyStatus!): APIKey!
   updateAPIKeyProfiles(id: ID!, input: UpdateAPIKeyProfilesInput!): APIKey!
-  rotateAPIKey(id: ID!): APIKey!
+  rotateAPIKey(id: ID!, key: String): APIKey!
+  deleteAPIKey(id: ID!): Boolean!
   bulkDisableAPIKeys(ids: [ID!]!): Boolean!
   bulkEnableAPIKeys(ids: [ID!]!): Boolean!
   bulkArchiveAPIKeys(ids: [ID!]!): Boolean!

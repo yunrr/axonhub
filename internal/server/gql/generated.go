@@ -1015,7 +1015,7 @@ type ComplexityRoot struct {
 		CompleteAutoDisableChannelOnboarding  func(childComplexity int, input CompleteAutoDisableChannelOnboardingInput) int
 		CompleteOnboarding                    func(childComplexity int, input CompleteOnboardingInput) int
 		CompleteSystemModelSettingOnboarding  func(childComplexity int, input CompleteSystemModelSettingOnboardingInput) int
-		CreateAPIKey                          func(childComplexity int, input ent.CreateAPIKeyInput) int
+		CreateAPIKey                          func(childComplexity int, input ent.CreateAPIKeyInput, key *string) int
 		CreateAPIKeyProfileTemplate           func(childComplexity int, input ent.CreateAPIKeyProfileTemplateInput, profile objects.APIKeyProfile) int
 		CreateChannel                         func(childComplexity int, input ent.CreateChannelInput) int
 		CreateChannelOverrideTemplate         func(childComplexity int, input ent.CreateChannelOverrideTemplateInput) int
@@ -1026,6 +1026,7 @@ type ComplexityRoot struct {
 		CreatePromptProtectionRule            func(childComplexity int, input ent.CreatePromptProtectionRuleInput) int
 		CreateRole                            func(childComplexity int, input ent.CreateRoleInput) int
 		CreateUser                            func(childComplexity int, input ent.CreateUserInput) int
+		DeleteAPIKey                          func(childComplexity int, id objects.GUID) int
 		DeleteAPIKeyProfileTemplate           func(childComplexity int, id objects.GUID) int
 		DeleteChannel                         func(childComplexity int, id objects.GUID) int
 		DeleteChannelOverrideTemplate         func(childComplexity int, id objects.GUID) int
@@ -1051,7 +1052,7 @@ type ComplexityRoot struct {
 		Restore                               func(childComplexity int, file graphql.Upload, input backup.RestoreOptions) int
 		RetainThread                          func(childComplexity int, id objects.GUID) int
 		RetainTrace                           func(childComplexity int, id objects.GUID) int
-		RotateAPIKey                          func(childComplexity int, id objects.GUID) int
+		RotateAPIKey                          func(childComplexity int, id objects.GUID, key *string) int
 		SaveChannelEndpoints                  func(childComplexity int, input biz.SaveChannelEndpointsInput) int
 		SaveChannelModelPrices                func(childComplexity int, channelID objects.GUID, input []*biz.SaveChannelModelPriceInput) int
 		SaveProxyPreset                       func(childComplexity int, input biz.ProxyPreset) int
@@ -2284,11 +2285,12 @@ type MutationResolver interface {
 	EnableAllChannelAPIKeys(ctx context.Context, channelID objects.GUID) (bool, error)
 	EnableSelectedChannelAPIKeys(ctx context.Context, channelID objects.GUID, keys []string) (bool, error)
 	DeleteDisabledChannelAPIKeys(ctx context.Context, channelID objects.GUID, keys []string) (*biz.DeleteDisabledAPIKeysResult, error)
-	CreateAPIKey(ctx context.Context, input ent.CreateAPIKeyInput) (*ent.APIKey, error)
+	CreateAPIKey(ctx context.Context, input ent.CreateAPIKeyInput, key *string) (*ent.APIKey, error)
 	UpdateAPIKey(ctx context.Context, id objects.GUID, input ent.UpdateAPIKeyInput) (*ent.APIKey, error)
 	UpdateAPIKeyStatus(ctx context.Context, id objects.GUID, status apikey.Status) (*ent.APIKey, error)
 	UpdateAPIKeyProfiles(ctx context.Context, id objects.GUID, input objects.APIKeyProfiles) (*ent.APIKey, error)
-	RotateAPIKey(ctx context.Context, id objects.GUID) (*ent.APIKey, error)
+	RotateAPIKey(ctx context.Context, id objects.GUID, key *string) (*ent.APIKey, error)
+	DeleteAPIKey(ctx context.Context, id objects.GUID) (bool, error)
 	BulkDisableAPIKeys(ctx context.Context, ids []*objects.GUID) (bool, error)
 	BulkEnableAPIKeys(ctx context.Context, ids []*objects.GUID) (bool, error)
 	BulkArchiveAPIKeys(ctx context.Context, ids []*objects.GUID) (bool, error)
@@ -6283,7 +6285,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.complexity.Mutation.CreateAPIKey(childComplexity, args["input"].(ent.CreateAPIKeyInput)), true
+		return e.complexity.Mutation.CreateAPIKey(childComplexity, args["input"].(ent.CreateAPIKeyInput), args["key"].(*string)), true
 	case "Mutation.createApiKeyProfileTemplate":
 		if e.complexity.Mutation.CreateAPIKeyProfileTemplate == nil {
 			break
@@ -6394,6 +6396,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Mutation.CreateUser(childComplexity, args["input"].(ent.CreateUserInput)), true
+	case "Mutation.deleteAPIKey":
+		if e.complexity.Mutation.DeleteAPIKey == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteAPIKey_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Mutation.DeleteAPIKey(childComplexity, args["id"].(objects.GUID)), true
 	case "Mutation.deleteApiKeyProfileTemplate":
 		if e.complexity.Mutation.DeleteAPIKeyProfileTemplate == nil {
 			break
@@ -6674,7 +6687,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.complexity.Mutation.RotateAPIKey(childComplexity, args["id"].(objects.GUID)), true
+		return e.complexity.Mutation.RotateAPIKey(childComplexity, args["id"].(objects.GUID), args["key"].(*string)), true
 	case "Mutation.saveChannelEndpoints":
 		if e.complexity.Mutation.SaveChannelEndpoints == nil {
 			break
@@ -12888,6 +12901,11 @@ func (ec *executionContext) field_Mutation_createAPIKey_args(ctx context.Context
 		return nil, err
 	}
 	args["input"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "key", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["key"] = arg1
 	return args, nil
 }
 
@@ -13003,6 +13021,17 @@ func (ec *executionContext) field_Mutation_createUser_args(ctx context.Context, 
 		return nil, err
 	}
 	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_deleteAPIKey_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2githubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐGUID)
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
 	return args, nil
 }
 
@@ -13313,6 +13342,11 @@ func (ec *executionContext) field_Mutation_rotateAPIKey_args(ctx context.Context
 		return nil, err
 	}
 	args["id"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "key", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["key"] = arg1
 	return args, nil
 }
 
@@ -34383,7 +34417,7 @@ func (ec *executionContext) _Mutation_createAPIKey(ctx context.Context, field gr
 		ec.fieldContext_Mutation_createAPIKey,
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.resolvers.Mutation().CreateAPIKey(ctx, fc.Args["input"].(ent.CreateAPIKeyInput))
+			return ec.resolvers.Mutation().CreateAPIKey(ctx, fc.Args["input"].(ent.CreateAPIKeyInput), fc.Args["key"].(*string))
 		},
 		nil,
 		ec.marshalNAPIKey2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋentᚐAPIKey,
@@ -34675,7 +34709,7 @@ func (ec *executionContext) _Mutation_rotateAPIKey(ctx context.Context, field gr
 		ec.fieldContext_Mutation_rotateAPIKey,
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.resolvers.Mutation().RotateAPIKey(ctx, fc.Args["id"].(objects.GUID))
+			return ec.resolvers.Mutation().RotateAPIKey(ctx, fc.Args["id"].(objects.GUID), fc.Args["key"].(*string))
 		},
 		nil,
 		ec.marshalNAPIKey2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋentᚐAPIKey,
@@ -34734,6 +34768,47 @@ func (ec *executionContext) fieldContext_Mutation_rotateAPIKey(ctx context.Conte
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_rotateAPIKey_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_deleteAPIKey(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_deleteAPIKey,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.resolvers.Mutation().DeleteAPIKey(ctx, fc.Args["id"].(objects.GUID))
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_deleteAPIKey(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_deleteAPIKey_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -100246,6 +100321,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "rotateAPIKey":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_rotateAPIKey(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "deleteAPIKey":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_deleteAPIKey(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++

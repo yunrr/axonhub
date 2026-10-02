@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useTranslation } from 'react-i18next';
+import { z } from 'zod';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -10,9 +11,17 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Switch } from '@/components/ui/switch';
 import { useApiKeysContext } from '../context/apikeys-context';
 import { useCreateApiKey } from '../data/apikeys';
-import { CreateApiKeyInput, createApiKeyInputSchema } from '../data/schema';
+import { createApiKeyInputSchema } from '../data/schema';
 import { ScopesSelect } from '@/components/scopes-select';
 import { usePermissions } from '@/hooks/usePermissions';
+
+// The custom key value is submitted as a separate createAPIKey argument, so it
+// extends the shared input schema only at the form level.
+const createFormSchema = createApiKeyInputSchema.extend({
+  key: z.string().optional(),
+});
+
+type CreateFormValues = z.infer<typeof createFormSchema>;
 
 export function ApiKeysCreateDialog() {
   const { t } = useTranslation();
@@ -26,13 +35,14 @@ export function ApiKeysCreateDialog() {
 
   const [dialogContent, setDialogContent] = useState<HTMLDivElement | null>(null);
 
-  const form = useForm<CreateApiKeyInput>({
-    resolver: zodResolver(createApiKeyInputSchema),
+  const form = useForm<CreateFormValues>({
+    resolver: zodResolver(createFormSchema),
     defaultValues: {
       name: '',
       type: 'personal',
       scopes: undefined,
       allowedIps: [],
+      key: '',
     },
   });
 
@@ -44,9 +54,10 @@ export function ApiKeysCreateDialog() {
     }
   }, [canCreateProjectApiKey, form]);
 
-  const onSubmit = async (data: CreateApiKeyInput) => {
+  const onSubmit = async (data: CreateFormValues) => {
     setIsSubmitting(true);
     try {
+      const { key: customKey, ...formData } = data;
       const allowedIps = ipRestrictionEnabled
         ? ipInput
             .split(',')
@@ -54,11 +65,12 @@ export function ApiKeysCreateDialog() {
             .filter((s) => s !== '')
         : [];
       const submitData = {
-        ...data,
-        scopes: data.type === 'user' || data.type === 'personal' ? undefined : data.scopes,
+        ...formData,
+        scopes: formData.type === 'user' || formData.type === 'personal' ? undefined : formData.scopes,
         allowedIps,
       };
-      const result = await createApiKey.mutateAsync(submitData);
+      const key = apiKeyType === 'user' || apiKeyType === 'personal' ? customKey?.trim() || undefined : undefined;
+      const result = await createApiKey.mutateAsync({ input: submitData, key });
       form.reset();
       setIPRestrictionEnabled(false);
       setIpInput('');
@@ -100,6 +112,23 @@ export function ApiKeysCreateDialog() {
                 </FormItem>
               )}
             />
+
+            {(apiKeyType === 'user' || apiKeyType === 'personal') && (
+              <FormField
+                control={form.control}
+                name='key'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('apikeys.dialogs.fields.key.label')}</FormLabel>
+                    <FormControl>
+                      <Input placeholder={t('apikeys.dialogs.fields.key.placeholder')} {...field} />
+                    </FormControl>
+                    <FormDescription>{t('apikeys.dialogs.fields.key.description')}</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <FormField
               control={form.control}

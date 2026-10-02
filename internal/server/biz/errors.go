@@ -17,6 +17,8 @@ var (
 	ErrServiceAccountRequired = errors.New("service account api key required")
 	ErrAPIKeyScopeRequired    = errors.New("api key missing required scope")
 	ErrAPIKeyNameRequired     = errors.New("api key name is required")
+	ErrAPIKeyExists           = errors.New("api key already exists")
+	ErrAPIKeyNotArchived      = errors.New("only archived api keys can be deleted")
 	ErrSystemNotInitialized   = errors.New("system not initialized")
 	ErrOIDCLoginRequired      = errors.New("OIDC user without password, please login via OIDC or set a password")
 	ErrProjectNotFound        = errors.New("project not found")

@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard';
 import { useApiKeysContext } from '../context/apikeys-context';
 import { useRotateApiKey } from '../data/apikeys';
@@ -20,16 +21,20 @@ export function ApiKeysRotateDialog() {
   const { isDialogOpen, closeDialog, selectedApiKey, setSelectedApiKey } = useApiKeysContext();
   const rotateApiKey = useRotateApiKey();
   const [newKey, setNewKey] = useState<string | null>(null);
+  const [customKey, setCustomKey] = useState('');
   const { isCopied, handleCopy } = useCopyToClipboard({
     text: newKey ?? '',
     copyMessage: t('apikeys.messages.copied'),
   });
 
+  const supportsCustomKey = selectedApiKey?.type === 'user' || selectedApiKey?.type === 'personal';
+
   const handleRotate = async () => {
     if (!selectedApiKey) return;
 
     try {
-      const result = await rotateApiKey.mutateAsync(selectedApiKey.id);
+      const key = supportsCustomKey ? customKey.trim() || undefined : undefined;
+      const result = await rotateApiKey.mutateAsync({ id: selectedApiKey.id, key });
       setNewKey(result.key);
       // Update the selected API key with the new key
       setSelectedApiKey({ ...selectedApiKey, key: result.key });
@@ -40,6 +45,7 @@ export function ApiKeysRotateDialog() {
 
   const handleClose = () => {
     setNewKey(null);
+    setCustomKey('');
     closeDialog();
   };
 
@@ -61,6 +67,21 @@ export function ApiKeysRotateDialog() {
             {t('apikeys.dialogs.rotate.warning')}
           </AlertDescription>
         </Alert>
+
+        {!newKey && supportsCustomKey && (
+          <div className="space-y-2">
+            <label htmlFor="rotate-custom-key" className="text-sm font-medium">
+              {t('apikeys.dialogs.rotate.customKeyLabel')}
+            </label>
+            <Input
+              id="rotate-custom-key"
+              placeholder={t('apikeys.dialogs.rotate.customKeyPlaceholder')}
+              value={customKey}
+              onChange={(e) => setCustomKey(e.target.value)}
+            />
+            <p className="text-muted-foreground text-sm">{t('apikeys.dialogs.rotate.customKeyDescription')}</p>
+          </div>
+        )}
 
         {newKey ? (
           <div className="space-y-4">

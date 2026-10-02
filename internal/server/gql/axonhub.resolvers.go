@@ -462,8 +462,13 @@ func (r *mutationResolver) DeleteDisabledChannelAPIKeys(ctx context.Context, cha
 }
 
 // CreateAPIKey is the resolver for the createAPIKey field.
-func (r *mutationResolver) CreateAPIKey(ctx context.Context, input ent.CreateAPIKeyInput) (*ent.APIKey, error) {
-	return r.apiKeyService.CreateAPIKey(ctx, input)
+func (r *mutationResolver) CreateAPIKey(ctx context.Context, input ent.CreateAPIKeyInput, key *string) (*ent.APIKey, error) {
+	customKey := ""
+	if key != nil {
+		customKey = *key
+	}
+
+	return r.apiKeyService.CreateAPIKey(ctx, input, customKey)
 }
 
 // UpdateAPIKey is the resolver for the updateAPIKey field.
@@ -482,8 +487,22 @@ func (r *mutationResolver) UpdateAPIKeyProfiles(ctx context.Context, id objects.
 }
 
 // RotateAPIKey is the resolver for the rotateAPIKey field.
-func (r *mutationResolver) RotateAPIKey(ctx context.Context, id objects.GUID) (*ent.APIKey, error) {
-	return r.apiKeyService.RotateAPIKey(ctx, id.ID)
+func (r *mutationResolver) RotateAPIKey(ctx context.Context, id objects.GUID, key *string) (*ent.APIKey, error) {
+	customKey := ""
+	if key != nil {
+		customKey = *key
+	}
+
+	return r.apiKeyService.RotateAPIKey(ctx, id.ID, customKey)
+}
+
+// DeleteAPIKey is the resolver for the deleteAPIKey field.
+func (r *mutationResolver) DeleteAPIKey(ctx context.Context, id objects.GUID) (bool, error) {
+	if err := r.apiKeyService.DeleteAPIKey(ctx, id.ID); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 // BulkDisableAPIKeys is the resolver for the bulkDisableAPIKeys field.

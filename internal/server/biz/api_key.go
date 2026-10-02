@@ -39,6 +39,10 @@ const (
 
 	//nolint:gosec // Checked.
 	NoAuthAPIKeyName = "No Auth System Key"
+
+	// maxCustomAPIKeyLength caps user-provided key values so the soft-delete
+	// release suffix still fits the api_keys.key column across dialects.
+	maxCustomAPIKeyLength = 200
 )
 
 type APIKeyServiceParams struct {
@@ -184,6 +188,26 @@ func GenerateAPIKey(prefix string) (string, error) {
 	return prefix + "-" + hex.EncodeToString(bytes), nil
 }
 
+// resolveAPIKeyValue returns the trimmed custom key when one is supplied,
+// otherwise generates a random key with the configured prefix. Custom values
+// are only accepted for user and personal API keys.
+func (s *APIKeyService) resolveAPIKeyValue(customKeys []string, keyType apikey.Type) (string, error) {
+	if len(customKeys) == 0 || strings.TrimSpace(customKeys[0]) == "" {
+		return GenerateAPIKey(s.keyPrefix)
+	}
+
+	customKey := strings.TrimSpace(customKeys[0])
+	if keyType != apikey.TypeUser && keyType != apikey.TypePersonal {
+		return "", fmt.Errorf("custom api key value is only allowed for user and personal API keys")
+	}
+
+	if len(customKey) > maxCustomAPIKeyLength {
+		return "", fmt.Errorf("custom api key value must not exceed %d characters", maxCustomAPIKeyLength)
+	}
+
+	return customKey, nil
+}
+
 // lockProjectForAPIKeyName serializes API key name create/rename within a single
 // project so the live-name check and the write are atomic across concurrent
 // writers (there is no DB unique constraint backing the name). It MUST be called
@@ -287,8 +311,10 @@ func (s *APIKeyService) CreateLLMAPIKey(ctx context.Context, owner *ent.APIKey, 
 	return apiKey, nil
 }
 
-// CreateAPIKey creates a new API key for a user.
-func (s *APIKeyService) CreateAPIKey(ctx context.Context, input ent.CreateAPIKeyInput) (*ent.APIKey, error) {
+// CreateAPIKey creates a new API key for a user. When a non-empty customKey is
+// provided it is used as the key value (user and personal keys only); otherwise
+// a random key is generated with the configured prefix.
+func (s *APIKeyService) CreateAPIKey(ctx context.Context, input ent.CreateAPIKeyInput, customKey ...string) (*ent.APIKey, error) {
 	user, ok := contexts.GetUser(ctx)
 	if !ok {
 		return nil, fmt.Errorf("user not found in context")
@@ -308,10 +334,10 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, input ent.CreateAPIKey
 		}
 	}
 
-	// Generate API key with configured prefix
-	generatedKey, err := GenerateAPIKey(s.keyPrefix)
+	// Use the custom key value when provided, generate a random one otherwise
+	generatedKey, err := s.resolveAPIKeyValue(customKey, apiKeyType)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate API key: %w", err)
+		return nil, err
 	}
 
 	var apiKey *ent.APIKey
@@ -321,6 +347,19 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, input ent.CreateAPIKey
 
 		if err := s.lockProjectForAPIKeyName(ctx, input.ProjectID); err != nil {
 			return err
+		}
+
+		// Custom key values must be unique; the DB unique index is the final guard.
+		if len(customKey) > 0 && strings.TrimSpace(customKey[0]) != "" {
+			dupKeys, err := client.APIKey.Query().
+				Where(apikey.KeyEQ(generatedKey)).
+				Count(authz.WithSystemBypass(ctx, "api key value uniqueness"))
+			if err != nil {
+				return fmt.Errorf("failed to check API key value uniqueness: %w", err)
+			}
+			if dupKeys > 0 {
+				return ErrAPIKeyExists
+			}
 		}
 
 		create := client.APIKey.Create().
@@ -1106,7 +1145,9 @@ func (s *APIKeyService) BulkArchiveAPIKeys(ctx context.Context, ids []int) error
 
 // RotateAPIKey rotates an API key by generating a new key value while preserving all other properties.
 // This is useful when a key is compromised or when an employee leaves, without losing usage statistics.
-func (s *APIKeyService) RotateAPIKey(ctx context.Context, id int) (*ent.APIKey, error) {
+// When a non-empty customKey is provided it is used as the new key value (user and personal keys
+// only); otherwise a random key is generated with the configured prefix.
+func (s *APIKeyService) RotateAPIKey(ctx context.Context, id int, customKey ...string) (*ent.APIKey, error) {
 	existing, err := s.db.APIKey.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get API key: %w", err)
@@ -1127,10 +1168,26 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, id int) (*ent.APIKey, 
 		}
 	}
 
-	// Generate a new API key
-	newKey, err := GenerateAPIKey(s.keyPrefix)
+	// Generate a new API key or use the provided custom value
+	newKey, err := s.resolveAPIKeyValue(customKey, existing.Type)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate new API key: %w", err)
+		return nil, err
+	}
+
+	// Custom key values must be unique; the DB unique index is the final guard.
+	if len(customKey) > 0 && strings.TrimSpace(customKey[0]) != "" {
+		dupKeys, err := s.db.APIKey.Query().
+			Where(
+				apikey.KeyEQ(newKey),
+				apikey.IDNEQ(id),
+			).
+			Count(authz.WithSystemBypass(ctx, "api key value uniqueness"))
+		if err != nil {
+			return nil, fmt.Errorf("failed to check API key value uniqueness: %w", err)
+		}
+		if dupKeys > 0 {
+			return nil, ErrAPIKeyExists
+		}
 	}
 
 	oldKey := existing.Key
@@ -1147,6 +1204,39 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, id int) (*ent.APIKey, 
 	s.invalidateAPIKeyCaches(ctx, oldKey, newKey)
 
 	return rotated, nil
+}
+
+// DeleteAPIKey soft-deletes an archived API key and rewrites its key value to
+// release the original key string for future reuse: the api_keys.key unique
+// index also covers soft-deleted rows, so the stored value must be freed here.
+func (s *APIKeyService) DeleteAPIKey(ctx context.Context, id int) error {
+	existing, err := s.db.APIKey.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to get API key: %w", err)
+	}
+
+	// The noauth key is a system key referenced by the fixed no-auth value.
+	if existing.Type == apikey.TypeNoauth {
+		return fmt.Errorf("noauth type API key cannot be deleted")
+	}
+
+	if existing.Status != apikey.StatusArchived {
+		return fmt.Errorf("%w", ErrAPIKeyNotArchived)
+	}
+
+	releasedKey := fmt.Sprintf("%s:deleted:%d", existing.Key, time.Now().UnixNano())
+
+	if _, err := s.db.APIKey.UpdateOneID(id).
+		SetDeletedAt(int(time.Now().Unix())).
+		SetKey(releasedKey).
+		Save(ctx); err != nil {
+		return fmt.Errorf("failed to delete API key: %w", err)
+	}
+
+	// Invalidate caches for both the old and the released key values
+	s.invalidateAPIKeyCaches(ctx, existing.Key, releasedKey)
+
+	return nil
 }
 
 func (s *APIKeyService) EnsureNoAuthAPIKey(ctx context.Context) (*ent.APIKey, error) {

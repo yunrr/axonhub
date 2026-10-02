@@ -3,6 +3,7 @@ package biz
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/looplj/axonhub/internal/ent/enttest"
 	"github.com/looplj/axonhub/internal/ent/project"
 	"github.com/looplj/axonhub/internal/ent/role"
+	"github.com/looplj/axonhub/internal/ent/schema/schematype"
 	"github.com/looplj/axonhub/internal/ent/user"
 	"github.com/looplj/axonhub/internal/objects"
 	"github.com/looplj/axonhub/internal/pkg/xcache"
@@ -1727,4 +1729,215 @@ func TestAPIKeyService_UpdateAPIKeyProfiles_PersonalKeyGuard(t *testing.T) {
 	// A system owner can too.
 	_, err = apiKeyService.UpdateAPIKeyProfiles(contexts.WithUser(ctx, ownerUser), apiKey.ID, profiles)
 	require.NoError(t, err)
+}
+
+// setupAPIKeyTestContext creates an owner user with an active project and
+// returns a user context plus the project ID for API key service tests.
+func setupAPIKeyTestContext(t *testing.T, client *ent.Client) (context.Context, int) {
+	t.Helper()
+
+	ctx := ent.NewContext(context.Background(), client)
+	ctx = authz.WithTestBypass(ctx)
+
+	hashedPassword, err := HashPassword("test-password")
+	require.NoError(t, err)
+
+	ownerUser, err := client.User.Create().
+		SetEmail(fmt.Sprintf("test-%d@example.com", time.Now().UnixNano())).
+		SetPassword(hashedPassword).
+		SetFirstName("Test").
+		SetLastName("User").
+		SetStatus(user.StatusActivated).
+		Save(ctx)
+	require.NoError(t, err)
+
+	projectName := uuid.NewString()
+	testProject, err := client.Project.Create().
+		SetName(projectName).
+		SetDescription(projectName).
+		SetStatus(project.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = client.UserProject.Create().
+		SetUserID(ownerUser.ID).
+		SetProjectID(testProject.ID).
+		SetIsOwner(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	return contexts.WithUser(ctx, ownerUser), testProject.ID
+}
+
+func TestAPIKeyService_CreateAPIKey_CustomKey(t *testing.T) {
+	apiKeyService, client := setupTestAPIKeyService(t, xcache.Config{Mode: xcache.ModeMemory})
+	defer apiKeyService.Stop()
+	defer client.Close()
+
+	ctxWithUser, projectID := setupAPIKeyTestContext(t, client)
+
+	t.Run("creates key with custom value", func(t *testing.T) {
+		apiKey, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Custom Key",
+			ProjectID: projectID,
+		}, "my-custom-key-001")
+		require.NoError(t, err)
+		require.Equal(t, "my-custom-key-001", apiKey.Key)
+	})
+
+	t.Run("trims whitespace around custom value", func(t *testing.T) {
+		apiKey, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Padded Key",
+			ProjectID: projectID,
+		}, "  padded-key-002  ")
+		require.NoError(t, err)
+		require.Equal(t, "padded-key-002", apiKey.Key)
+	})
+
+	t.Run("generates random key when custom value empty", func(t *testing.T) {
+		apiKey, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Random Key",
+			ProjectID: projectID,
+		}, "   ")
+		require.NoError(t, err)
+		require.True(t, strings.HasPrefix(apiKey.Key, "ah-"))
+	})
+
+	t.Run("rejects duplicate custom value", func(t *testing.T) {
+		_, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Duplicate Key",
+			ProjectID: projectID,
+		}, "my-custom-key-001")
+		require.ErrorIs(t, err, ErrAPIKeyExists)
+	})
+
+	t.Run("rejects custom value for service account", func(t *testing.T) {
+		serviceAccountType := apikey.TypeServiceAccount
+		_, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "SA Custom Key",
+			ProjectID: projectID,
+			Type:      &serviceAccountType,
+		}, "sa-custom-key")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "only allowed for user and personal API keys")
+	})
+}
+
+func TestAPIKeyService_RotateAPIKey_CustomKey(t *testing.T) {
+	apiKeyService, client := setupTestAPIKeyService(t, xcache.Config{Mode: xcache.ModeMemory})
+	defer apiKeyService.Stop()
+	defer client.Close()
+
+	ctxWithUser, projectID := setupAPIKeyTestContext(t, client)
+
+	t.Run("rotates personal key to custom value", func(t *testing.T) {
+		personalType := apikey.TypePersonal
+		apiKey, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Rotate Custom",
+			ProjectID: projectID,
+			Type:      &personalType,
+		})
+		require.NoError(t, err)
+		require.Equal(t, apikey.TypePersonal, apiKey.Type)
+
+		rotated, err := apiKeyService.RotateAPIKey(ctxWithUser, apiKey.ID, "rotated-custom-key")
+		require.NoError(t, err)
+		require.Equal(t, "rotated-custom-key", rotated.Key)
+		require.Equal(t, apiKey.ID, rotated.ID)
+	})
+
+	t.Run("rejects duplicate custom value", func(t *testing.T) {
+		target, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Rotate Dup Target",
+			ProjectID: projectID,
+		}, "dup-rotate-target")
+		require.NoError(t, err)
+
+		dup, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Rotate Dup",
+			ProjectID: projectID,
+		}, "dup-rotate-source")
+		require.NoError(t, err)
+
+		_, err = apiKeyService.RotateAPIKey(ctxWithUser, dup.ID, target.Key)
+		require.ErrorIs(t, err, ErrAPIKeyExists)
+	})
+
+	t.Run("rotates without custom value stays random", func(t *testing.T) {
+		apiKey, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Rotate Random",
+			ProjectID: projectID,
+		}, "before-rotate-key")
+		require.NoError(t, err)
+
+		rotated, err := apiKeyService.RotateAPIKey(ctxWithUser, apiKey.ID)
+		require.NoError(t, err)
+		require.NotEqual(t, "before-rotate-key", rotated.Key)
+		require.True(t, strings.HasPrefix(rotated.Key, "ah-"))
+	})
+}
+
+func TestAPIKeyService_DeleteAPIKey(t *testing.T) {
+	apiKeyService, client := setupTestAPIKeyService(t, xcache.Config{Mode: xcache.ModeMemory})
+	defer apiKeyService.Stop()
+	defer client.Close()
+
+	ctxWithUser, projectID := setupAPIKeyTestContext(t, client)
+
+	t.Run("rejects deleting enabled key", func(t *testing.T) {
+		apiKey, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Enabled Key",
+			ProjectID: projectID,
+		})
+		require.NoError(t, err)
+
+		err = apiKeyService.DeleteAPIKey(ctxWithUser, apiKey.ID)
+		require.ErrorIs(t, err, ErrAPIKeyNotArchived)
+	})
+
+	t.Run("soft deletes archived key and releases the value", func(t *testing.T) {
+		apiKey, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Archived Key",
+			ProjectID: projectID,
+		}, "release-me-key")
+		require.NoError(t, err)
+
+		_, err = apiKeyService.UpdateAPIKeyStatus(ctxWithUser, apiKey.ID, apikey.StatusArchived)
+		require.NoError(t, err)
+
+		require.NoError(t, apiKeyService.DeleteAPIKey(ctxWithUser, apiKey.ID))
+
+		// The row is soft-deleted with a rewritten key value.
+		bypassCtx := schematype.SkipSoftDelete(authz.WithTestBypass(context.Background()))
+		deleted, err := client.APIKey.Query().
+			Where(apikey.IDEQ(apiKey.ID)).
+			Only(bypassCtx)
+		require.NoError(t, err)
+		require.NotZero(t, deleted.DeletedAt)
+		require.True(t, strings.HasPrefix(deleted.Key, "release-me-key:deleted:"))
+		require.NotEqual(t, "release-me-key", deleted.Key)
+
+		// The original key value is released and can be used again.
+		recreated, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Recreated Key",
+			ProjectID: projectID,
+		}, "release-me-key")
+		require.NoError(t, err)
+		require.Equal(t, "release-me-key", recreated.Key)
+	})
+
+	t.Run("deleted key no longer authenticates", func(t *testing.T) {
+		apiKey, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Auth Check Key",
+			ProjectID: projectID,
+		})
+		require.NoError(t, err)
+
+		_, err = apiKeyService.UpdateAPIKeyStatus(ctxWithUser, apiKey.ID, apikey.StatusArchived)
+		require.NoError(t, err)
+		require.NoError(t, apiKeyService.DeleteAPIKey(ctxWithUser, apiKey.ID))
+
+		_, err = apiKeyService.GetAPIKey(ctxWithUser, apiKey.Key)
+		require.Error(t, err)
+	})
 }
