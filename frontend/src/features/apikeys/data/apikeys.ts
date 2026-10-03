@@ -250,6 +250,12 @@ const BULK_ARCHIVE_APIKEYS_MUTATION = `
   }
 `;
 
+const BULK_DELETE_APIKEYS_MUTATION = `
+  mutation BulkDeleteAPIKeys($ids: [ID!]!) {
+    bulkDeleteAPIKeys(ids: $ids)
+  }
+`;
+
 const ROTATE_APIKEY_MUTATION = `
   mutation RotateAPIKey($id: ID!, $key: String) {
     rotateAPIKey(id: $id, key: $key) {
@@ -831,6 +837,26 @@ export function useBulkArchiveApiKeys() {
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['apiKeys'] });
       toast.success(t('apikeys.messages.bulkArchiveSuccess', { count: variables.length }));
+    },
+    onError: (error) => {
+      handleError(error);
+    },
+  });
+}
+
+export function useBulkDeleteApiKeys() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const { handleError } = useErrorHandler();
+
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      const data = await graphqlRequest<{ bulkDeleteAPIKeys: boolean }>(BULK_DELETE_APIKEYS_MUTATION, { ids });
+      return data.bulkDeleteAPIKeys;
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['apiKeys'] });
+      toast.success(t('apikeys.messages.bulkDeleteSuccess', { count: variables.length }));
     },
     onError: (error) => {
       handleError(error);

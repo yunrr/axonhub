@@ -12,7 +12,7 @@ import {
   getFacetedUniqueValues,
   useReactTable,
 } from '@tanstack/react-table';
-import { IconX, IconUserOff, IconArchive, IconCheck } from '@tabler/icons-react';
+import { IconX, IconUserOff, IconArchive, IconCheck, IconTrash } from '@tabler/icons-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -158,6 +158,9 @@ export function ApiKeysTable({
   const filteredSelectedRows = useMemo(() => table.getFilteredSelectedRowModel().rows, [table, rowSelection, data]);
 
   const selectedCount = filteredSelectedRows.length;
+  // Deleting archived keys only; the bulk delete button appears when every
+  // selected key is archived, mirroring the single-key row action.
+  const allSelectedArchived = filteredSelectedRows.every((row) => row.original.status === 'archived');
 
   useEffect(() => {
     const selected = filteredSelectedRows.map((row) => row.original as ApiKey);
@@ -292,6 +295,17 @@ export function ApiKeysTable({
             >
               <IconArchive className='h-4 w-4' />
             </Button>
+            {allSelectedArchived && (
+              <Button
+                variant='ghost'
+                size='icon'
+                className='text-destructive h-8 w-8 hover:bg-red-100 hover:text-red-700'
+                onClick={() => openDialog('bulkDelete')}
+                title={t('common.buttons.delete')}
+              >
+                <IconTrash className='h-4 w-4' />
+              </Button>
+            )}
           </div>
         </div>
       )}

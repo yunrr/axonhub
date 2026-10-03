@@ -1210,33 +1210,78 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, id int, customKey ...s
 // release the original key string for future reuse: the api_keys.key unique
 // index also covers soft-deleted rows, so the stored value must be freed here.
 func (s *APIKeyService) DeleteAPIKey(ctx context.Context, id int) error {
-	existing, err := s.db.APIKey.Get(ctx, id)
+	oldKey, releasedKey, err := s.deleteAPIKeyRow(ctx, s.db, id)
 	if err != nil {
-		return fmt.Errorf("failed to get API key: %w", err)
+		return err
+	}
+
+	// Invalidate caches for both the old and the released key values
+	s.invalidateAPIKeyCaches(ctx, oldKey, releasedKey)
+
+	return nil
+}
+
+// BulkDeleteAPIKeys soft-deletes multiple archived API keys in one transaction,
+// mirroring DeleteAPIKey for each selected key. All keys must be deletable;
+// otherwise the transaction is rolled back and nothing is deleted.
+func (s *APIKeyService) BulkDeleteAPIKeys(ctx context.Context, ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	var cacheKeys []string
+
+	err := s.RunInTransaction(ctx, func(ctx context.Context) error {
+		client := s.entFromContext(ctx)
+
+		for _, id := range ids {
+			oldKey, releasedKey, err := s.deleteAPIKeyRow(ctx, client, id)
+			if err != nil {
+				return err
+			}
+
+			cacheKeys = append(cacheKeys, oldKey, releasedKey)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	s.invalidateAPIKeyCaches(ctx, cacheKeys...)
+
+	return nil
+}
+
+// deleteAPIKeyRow validates and soft-deletes one API key, rewriting its key
+// value to release the original string. It returns the old and released values
+// for cache invalidation.
+func (s *APIKeyService) deleteAPIKeyRow(ctx context.Context, client *ent.Client, id int) (string, string, error) {
+	existing, err := client.APIKey.Get(ctx, id)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get API key: %w", err)
 	}
 
 	// The noauth key is a system key referenced by the fixed no-auth value.
 	if existing.Type == apikey.TypeNoauth {
-		return fmt.Errorf("noauth type API key cannot be deleted")
+		return "", "", fmt.Errorf("noauth type API key cannot be deleted")
 	}
 
 	if existing.Status != apikey.StatusArchived {
-		return fmt.Errorf("%w", ErrAPIKeyNotArchived)
+		return "", "", fmt.Errorf("%w", ErrAPIKeyNotArchived)
 	}
 
 	releasedKey := fmt.Sprintf("%s:deleted:%d", existing.Key, time.Now().UnixNano())
 
-	if _, err := s.db.APIKey.UpdateOneID(id).
+	if _, err := client.APIKey.UpdateOneID(id).
 		SetDeletedAt(int(time.Now().Unix())).
 		SetKey(releasedKey).
 		Save(ctx); err != nil {
-		return fmt.Errorf("failed to delete API key: %w", err)
+		return "", "", fmt.Errorf("failed to delete API key: %w", err)
 	}
 
-	// Invalidate caches for both the old and the released key values
-	s.invalidateAPIKeyCaches(ctx, existing.Key, releasedKey)
-
-	return nil
+	return existing.Key, releasedKey, nil
 }
 
 func (s *APIKeyService) EnsureNoAuthAPIKey(ctx context.Context) (*ent.APIKey, error) {

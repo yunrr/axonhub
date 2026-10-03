@@ -988,6 +988,7 @@ type ComplexityRoot struct {
 		BulkArchiveModels                     func(childComplexity int, ids []*objects.GUID) int
 		BulkCreateChannels                    func(childComplexity int, input biz.BulkCreateChannelsInput) int
 		BulkCreateModels                      func(childComplexity int, inputs []*ent.CreateModelInput) int
+		BulkDeleteAPIKeys                     func(childComplexity int, ids []*objects.GUID) int
 		BulkDeleteChannels                    func(childComplexity int, ids []*objects.GUID) int
 		BulkDeleteModels                      func(childComplexity int, ids []*objects.GUID) int
 		BulkDeletePromptProtectionRules       func(childComplexity int, ids []*objects.GUID) int
@@ -2294,6 +2295,7 @@ type MutationResolver interface {
 	BulkDisableAPIKeys(ctx context.Context, ids []*objects.GUID) (bool, error)
 	BulkEnableAPIKeys(ctx context.Context, ids []*objects.GUID) (bool, error)
 	BulkArchiveAPIKeys(ctx context.Context, ids []*objects.GUID) (bool, error)
+	BulkDeleteAPIKeys(ctx context.Context, ids []*objects.GUID) (bool, error)
 	CreateUser(ctx context.Context, input ent.CreateUserInput) (*ent.User, error)
 	UpdateUser(ctx context.Context, id objects.GUID, input ent.UpdateUserInput) (*ent.User, error)
 	UpdateUserStatus(ctx context.Context, id objects.GUID, status user.Status) (*ent.User, error)
@@ -5983,6 +5985,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Mutation.BulkCreateModels(childComplexity, args["inputs"].([]*ent.CreateModelInput)), true
+	case "Mutation.bulkDeleteAPIKeys":
+		if e.complexity.Mutation.BulkDeleteAPIKeys == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_bulkDeleteAPIKeys_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Mutation.BulkDeleteAPIKeys(childComplexity, args["ids"].([]*objects.GUID)), true
 	case "Mutation.bulkDeleteChannels":
 		if e.complexity.Mutation.BulkDeleteChannels == nil {
 			break
@@ -12589,6 +12602,17 @@ func (ec *executionContext) field_Mutation_bulkCreateModels_args(ctx context.Con
 		return nil, err
 	}
 	args["inputs"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_bulkDeleteAPIKeys_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "ids", ec.unmarshalNID2ᚕᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐGUIDᚄ)
+	if err != nil {
+		return nil, err
+	}
+	args["ids"] = arg0
 	return args, nil
 }
 
@@ -34932,6 +34956,47 @@ func (ec *executionContext) fieldContext_Mutation_bulkArchiveAPIKeys(ctx context
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_bulkArchiveAPIKeys_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_bulkDeleteAPIKeys(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_bulkDeleteAPIKeys,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.resolvers.Mutation().BulkDeleteAPIKeys(ctx, fc.Args["ids"].([]*objects.GUID))
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_bulkDeleteAPIKeys(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_bulkDeleteAPIKeys_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -100349,6 +100414,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "bulkArchiveAPIKeys":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_bulkArchiveAPIKeys(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "bulkDeleteAPIKeys":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_bulkDeleteAPIKeys(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++

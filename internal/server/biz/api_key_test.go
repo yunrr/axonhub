@@ -1941,3 +1941,70 @@ func TestAPIKeyService_DeleteAPIKey(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestAPIKeyService_BulkDeleteAPIKeys(t *testing.T) {
+	apiKeyService, client := setupTestAPIKeyService(t, xcache.Config{Mode: xcache.ModeMemory})
+	defer apiKeyService.Stop()
+	defer client.Close()
+
+	ctxWithUser, projectID := setupAPIKeyTestContext(t, client)
+
+	archiveKey := func(name string, value string) *ent.APIKey {
+		apiKey, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      name,
+			ProjectID: projectID,
+		}, value)
+		require.NoError(t, err)
+
+		_, err = apiKeyService.UpdateAPIKeyStatus(ctxWithUser, apiKey.ID, apikey.StatusArchived)
+		require.NoError(t, err)
+
+		return apiKey
+	}
+
+	t.Run("deletes all archived keys and releases values", func(t *testing.T) {
+		first := archiveKey("Bulk One", "bulk-one-key")
+		second := archiveKey("Bulk Two", "bulk-two-key")
+
+		require.NoError(t, apiKeyService.BulkDeleteAPIKeys(ctxWithUser, []int{first.ID, second.ID}))
+
+		bypassCtx := schematype.SkipSoftDelete(authz.WithTestBypass(context.Background()))
+		for _, apiKey := range []*ent.APIKey{first, second} {
+			deleted, err := client.APIKey.Query().
+				Where(apikey.IDEQ(apiKey.ID)).
+				Only(bypassCtx)
+			require.NoError(t, err)
+			require.NotZero(t, deleted.DeletedAt)
+			require.True(t, strings.HasPrefix(deleted.Key, apiKey.Key+":deleted:"))
+		}
+
+		// The released values can be used again.
+		recreated, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Bulk One Recreated",
+			ProjectID: projectID,
+		}, "bulk-one-key")
+		require.NoError(t, err)
+		require.Equal(t, "bulk-one-key", recreated.Key)
+	})
+
+	t.Run("rolls back when any key is not archived", func(t *testing.T) {
+		archived := archiveKey("Bulk Rollback Archived", "bulk-rollback-archived")
+		enabled, err := apiKeyService.CreateAPIKey(ctxWithUser, ent.CreateAPIKeyInput{
+			Name:      "Bulk Rollback Enabled",
+			ProjectID: projectID,
+		}, "bulk-rollback-enabled")
+		require.NoError(t, err)
+
+		err = apiKeyService.BulkDeleteAPIKeys(ctxWithUser, []int{archived.ID, enabled.ID})
+		require.ErrorIs(t, err, ErrAPIKeyNotArchived)
+
+		// The archived key in the same batch must remain untouched.
+		bypassCtx := schematype.SkipSoftDelete(authz.WithTestBypass(context.Background()))
+		untouched, err := client.APIKey.Query().
+			Where(apikey.IDEQ(archived.ID)).
+			Only(bypassCtx)
+		require.NoError(t, err)
+		require.Zero(t, untouched.DeletedAt)
+		require.Equal(t, "bulk-rollback-archived", untouched.Key)
+	})
+}

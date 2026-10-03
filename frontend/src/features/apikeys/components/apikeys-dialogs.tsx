@@ -4,6 +4,7 @@ import { type UpdateApiKeyProfilesInput } from '../data/schema';
 import { ApiKeysArchiveDialog } from './apikeys-archive-dialog';
 import { ApiKeysBulkArchiveDialog } from './apikeys-bulk-archive-dialog';
 import { ApiKeysBulkDisableDialog } from './apikeys-bulk-disable-dialog';
+import { ApiKeysBulkDeleteDialog } from './apikeys-bulk-delete-dialog';
 import { ApiKeysBulkEnableDialog } from './apikeys-bulk-enable-dialog';
 import { ApiKeysCreateDialog } from './apikeys-create-dialog';
 import { ApiKeysEditDialog } from './apikeys-edit-dialog';
@@ -28,6 +29,7 @@ export function ApiKeysDialogs() {
       <ApiKeysBulkDisableDialog />
       <ApiKeysBulkArchiveDialog />
       <ApiKeysBulkEnableDialog />
+      <ApiKeysBulkDeleteDialog />
       <ApiKeysRotateDialog />
     </>
   );
