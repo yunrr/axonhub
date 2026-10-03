@@ -206,6 +206,30 @@ func TestRequestPreviewHandlers_FallbackToStaticFetchPreservesAnnotationChunks(t
 	require.JSONEq(t, `{"event":"","data":{"id":"chatcmpl-preview","object":"chat.completion.chunk","model":"sonar-deep-research","choices":[{"index":0,"delta":{"content":"Source","annotations":[{"type":"url_citation","start_index":0,"end_index":6,"url_citation":{"url":"https://example.com/result","title":"Example Result"}}]}}]}}`, string(body.ResponseChunks[0]))
 }
 
+func TestRequestPreviewHandlers_FallbackToStaticFetchResolvesExternalMarker(t *testing.T) {
+	setup := newRequestPreviewTestSetup(t)
+
+	// Chunks persisted to data storage leave the external-storage marker on the
+	// request row; the fallback must resolve it instead of returning it as if
+	// it were content (seen as an empty preview after a server restart).
+	_, err := setup.client.Request.UpdateOneID(setup.req.ID).
+		SetStatus(request.StatusCompleted).
+		SetResponseChunks(biz.ExternalResponseChunksMarker).
+		Save(setup.ctx)
+	require.NoError(t, err)
+
+	resp := performPreviewRequest(t, setup.router, setup.req.ID)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Contains(t, resp.Header.Get("Content-Type"), "application/json")
+
+	var body RequestPreviewFallbackResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.Equal(t, "static-fetch", body.Mode)
+	require.Empty(t, body.ResponseChunks)
+}
+
 type requestPreviewTestSetup struct {
 	client             *ent.Client
 	ctx                context.Context

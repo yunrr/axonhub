@@ -146,14 +146,14 @@ func (h *RequestPreviewHandlers) PreviewRequest(c *gin.Context) {
 }
 
 func (h *RequestPreviewHandlers) writeStaticPreview(c *gin.Context, req *ent.Request) {
-	chunks := req.ResponseChunks
-	if len(chunks) == 0 {
-		loadedChunks, err := h.RequestService.LoadResponseChunks(c.Request.Context(), req)
-		if err != nil {
-			JSONError(c, http.StatusInternalServerError, errors.New("Failed to load request preview"))
-			return
-		}
-		chunks = loadedChunks
+	// LoadResponseChunks is the canonical resolver: it strips the external
+	// storage marker (`{"_ext":1}`) from row chunks and loads persisted chunks
+	// from data storage for finished streams, so the marker itself is never
+	// returned to the client as if it were content.
+	chunks, err := h.RequestService.LoadResponseChunks(c.Request.Context(), req)
+	if err != nil {
+		JSONError(c, http.StatusInternalServerError, errors.New("Failed to load request preview"))
+		return
 	}
 
 	c.JSON(http.StatusOK, RequestPreviewFallbackResponse{
