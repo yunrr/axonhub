@@ -1025,7 +1025,9 @@ func (s *SystemService) StoragePolicyOrDefault(ctx context.Context) *StoragePoli
 // SetStoragePolicy sets the storage policy configuration.
 func (s *SystemService) SetStoragePolicy(ctx context.Context, policy *StoragePolicy) error {
 	for _, opt := range policy.CleanupOptions {
-		if opt.CleanupDays <= 0 {
+		// Disabled options keep data forever, so their days value is irrelevant;
+		// legacy policies may carry zero there and must stay saveable.
+		if opt.Enabled && opt.CleanupDays <= 0 {
 			return fmt.Errorf("cleanup_days for %q must be positive; set enabled=false to keep data forever", opt.ResourceType)
 		}
 	}

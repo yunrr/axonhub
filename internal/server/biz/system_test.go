@@ -1435,3 +1435,50 @@ func TestSetRetryPolicy_RejectsPermanentDelete(t *testing.T) {
 	var coded *xerrors.CodedError
 	require.ErrorAs(t, err, &coded)
 }
+
+func TestSystemService_SetStoragePolicy_DisabledCleanupOptionKeepsZeroDays(t *testing.T) {
+	client := enttest.NewEntClient(t, "sqlite3", "file:ent?mode=memory&_fk=1")
+	defer client.Close()
+
+	service := NewSystemService(SystemServiceParams{Ent: client, CacheConfig: xcache.Config{Mode: xcache.ModeMemory}})
+	ctx := authz.WithTestBypass(ent.NewContext(context.Background(), client))
+
+	// Legacy policies store disabled cleanup options with zero days; they must
+	// stay saveable or the storage policy page can never persist any change.
+	legacyPolicy := &StoragePolicy{
+		StoreChunks:       true,
+		LivePreview:       true,
+		StoreRequestBody:  true,
+		StoreResponseBody: true,
+		CleanupOptions: []CleanupOption{
+			{ResourceType: CleanupResourceRequests, Enabled: true, CleanupDays: 1},
+			{ResourceType: CleanupResourceUsageLogs, Enabled: false, CleanupDays: 0},
+		},
+	}
+	require.NoError(t, service.SetStoragePolicy(ctx, legacyPolicy))
+
+	policy, err := service.StoragePolicy(ctx)
+	require.NoError(t, err)
+	usageLogs, ok := findCleanupOption(policy.CleanupOptions, CleanupResourceUsageLogs)
+	require.True(t, ok)
+	require.False(t, usageLogs.Enabled)
+	require.Equal(t, 0, usageLogs.CleanupDays)
+
+	enabledZeroDays := &StoragePolicy{
+		CleanupOptions: []CleanupOption{
+			{ResourceType: CleanupResourceRequests, Enabled: true, CleanupDays: 0},
+		},
+	}
+	err = service.SetStoragePolicy(ctx, enabledZeroDays)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must be positive")
+}
+
+func findCleanupOption(options []CleanupOption, resourceType string) (CleanupOption, bool) {
+	for _, opt := range options {
+		if opt.ResourceType == resourceType {
+			return opt, true
+		}
+	}
+	return CleanupOption{}, false
+}
