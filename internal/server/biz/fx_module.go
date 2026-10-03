@@ -64,6 +64,17 @@ var Module = fx.Module("biz",
 			},
 		})
 	}),
+	fx.Invoke(func(lc fx.Lifecycle, svc *RequestService) {
+		lc.Append(fx.Hook{
+			OnStart: func(ctx context.Context) error {
+				if err := svc.SweepStaleRequests(ctx); err != nil {
+					// Hygiene sweep only: report and keep starting.
+					log.Error(ctx, "failed to sweep stale in-flight requests", log.Cause(err))
+				}
+				return nil
+			},
+		})
+	}),
 	fx.Invoke(func(lc fx.Lifecycle, svc *ChannelService, s *scheduler.Scheduler) {
 		lc.Append(fx.Hook{
 			OnStart: func(ctx context.Context) error {
