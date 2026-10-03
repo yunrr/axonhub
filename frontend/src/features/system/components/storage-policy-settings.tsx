@@ -130,6 +130,26 @@ function cleanupOption(options: CleanupOption[], resourceType: string): CleanupO
   return options.find((option) => option.resourceType === resourceType);
 }
 
+// Legacy policies can store zero days for disabled cleanup options; enabling
+// such an option as-is would fail the backend validation, so fill the
+// resource's default days instead. Keep in sync with defaultCleanupOptions in
+// internal/server/biz/system_default.go.
+function cleanupDaysOnEnable(resourceType: string, cleanupDays: number): number {
+  if (cleanupDays > 0) {
+    return cleanupDays;
+  }
+
+  const defaults: Record<string, number> = {
+    requests: 3,
+    usage_logs: 30,
+    request_bodies: 7,
+    response_bodies: 7,
+    response_chunks: 3,
+  };
+
+  return defaults[resourceType] ?? 30;
+}
+
 export function StoragePolicySettings() {
   const { t, i18n } = useTranslation();
   const { isLoading, setIsLoading } = useSystemContext();
@@ -339,11 +359,18 @@ export function StoragePolicySettings() {
   };
 
   const handleCleanupOptionChange = (resourceType: string, field: keyof CleanupOption, value: CleanupOption[keyof CleanupOption]) => {
+    const patch: Partial<CleanupOption> = { [field]: value };
+
+    if (field === 'enabled' && value === true) {
+      const current = cleanupOption(storagePolicyState.cleanupOptions, resourceType);
+      if (current && current.cleanupDays <= 0) {
+        patch.cleanupDays = cleanupDaysOnEnable(resourceType, current.cleanupDays);
+      }
+    }
+
     setStoragePolicyState({
       ...storagePolicyState,
-      cleanupOptions: upsertCleanupOption(storagePolicyState.cleanupOptions, resourceType, {
-        [field]: value,
-      }),
+      cleanupOptions: upsertCleanupOption(storagePolicyState.cleanupOptions, resourceType, patch),
     });
   };
 
