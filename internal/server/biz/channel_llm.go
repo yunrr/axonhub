@@ -41,6 +41,7 @@ import (
 	"github.com/looplj/axonhub/llm/transformer/openai"
 	"github.com/looplj/axonhub/llm/transformer/openai/codex"
 	"github.com/looplj/axonhub/llm/transformer/openai/copilot"
+	"github.com/looplj/axonhub/llm/transformer/openai/decisions"
 	"github.com/looplj/axonhub/llm/transformer/openai/responses"
 	"github.com/looplj/axonhub/llm/transformer/opencode"
 	"github.com/looplj/axonhub/llm/transformer/openrouter"
@@ -298,6 +299,21 @@ func (svc *ChannelService) buildCodexOutbound(
 	alphaSearchPath string,
 	httpClient *httpclient.HttpClient,
 ) (transformer.Outbound, error) {
+	imageMainModel := strings.TrimSpace(c.DefaultTestModel)
+	if imageMainModel != "" {
+		modelChannel := ch
+		if modelChannel == nil {
+			modelChannel = &Channel{Channel: c}
+		}
+		modelKey := imageMainModel
+		if c.Settings != nil && c.Settings.LowercaseModelID {
+			modelKey = strings.ToLower(modelKey)
+		}
+		if mapped, err := modelChannel.ChooseModel(modelKey); err == nil {
+			imageMainModel = mapped
+		}
+	}
+
 	if c.Credentials.IsOAuth() {
 		if ch != nil {
 			if existing, ok := ch.Outbound.(*codex.OutboundTransformer); ok {
@@ -307,6 +323,7 @@ func (svc *ChannelService) buildCodexOutbound(
 						BaseURL:         baseURL,
 						Transport:       transport,
 						AlphaSearchPath: alphaSearchPath,
+						ImageMainModel:  imageMainModel,
 					})
 				}
 			}
@@ -335,6 +352,7 @@ func (svc *ChannelService) buildCodexOutbound(
 			BaseURL:         baseURL,
 			Transport:       transport,
 			AlphaSearchPath: alphaSearchPath,
+			ImageMainModel:  imageMainModel,
 		})
 	}
 
@@ -346,6 +364,7 @@ func (svc *ChannelService) buildCodexOutbound(
 		BaseURL:         baseURL,
 		Transport:       transport,
 		AlphaSearchPath: alphaSearchPath,
+		ImageMainModel:  imageMainModel,
 	})
 }
 
@@ -431,6 +450,12 @@ func (svc *ChannelService) buildNonDefaultEndpointOutbound(
 
 		return openai.NewOutboundTransformerWithConfig(&openai.Config{
 			PlatformType:   openai.PlatformOpenAI,
+			BaseURL:        baseURL,
+			APIKeyProvider: apiKeyProvider(),
+			EndpointPath:   ep.Path,
+		})
+	case llm.APIFormatOpenAIDecisions.String():
+		return decisions.NewOutboundTransformerWithConfig(&decisions.Config{
 			BaseURL:        baseURL,
 			APIKeyProvider: apiKeyProvider(),
 			EndpointPath:   ep.Path,

@@ -343,6 +343,7 @@ const WINDOW_LABEL_KEYS: Record<string, string> = {
   credits: 'quota.label.credits_remaining',
   overage: 'quota.label.overage_window',
   cycle: 'quota.label.subscription',
+  kwh: 'quota.label.kwh_remaining',
 };
 
 // PeriodQuotaEstimate prices each limit window: the backend sums what the
@@ -2008,6 +2009,10 @@ function QuotaRow({
               const kwhIncluded = qd.subscription.kwh_included ?? 0;
               const kwhUsed = qd.subscription.kwh_used ?? 0;
               const usedPct = kwhIncluded > 0 ? (kwhUsed / kwhIncluded) * 100 : 0;
+              const kwhLimit = quota.limits.find((l) => l.window === 'kwh');
+              // getLimitDurationPercent takes a non-optional limit (strict TS); the limit
+              // can be absent on stale cached quota data, so guard it.
+              const durationPercent = kwhLimit ? getLimitDurationPercent(kwhLimit) : undefined;
 
               items.push(
                 <div key='kwh' className='space-y-2.5'>
@@ -2024,6 +2029,7 @@ function QuotaRow({
                     </div>
                     <UsageTimeBar
                       usagePercent={usedPct}
+                      durationPercent={durationPercent}
                       tooltip={
                         <div className='space-y-0.5'>
                           <div className='font-medium'>{t('quota.label.kwh_remaining')}</div>
@@ -2031,6 +2037,9 @@ function QuotaRow({
                             {kwhUsed}/{kwhIncluded}
                           </div>
                           <div>{t('quota.label.percent_used', { percent: Math.round(usedPct) })}</div>
+                          {durationPercent !== undefined && (
+                            <div>{t('quota.label.time_elapsed')}: {Math.round(durationPercent)}%</div>
+                          )}
                           {quota.nextResetAt && <div>{formatTimeToReset(quota.nextResetAt)}</div>}
                         </div>
                       }
