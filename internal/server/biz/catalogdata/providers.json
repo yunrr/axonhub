@@ -19145,6 +19145,90 @@
           "tool_call": false,
           "type": "image-generation",
           "vision": true
+        },
+        {
+          "cost": {
+            "cache_read": 1.25,
+            "input": 5,
+            "output": 30
+          },
+          "display_name": "gpt-image-2.5-flare",
+          "id": "gpt-image-2.5-flare",
+          "limit": {
+            "context": 8192,
+            "output": 8192
+          },
+          "metadata": {
+            "description": "GPT-Image-2.5 Flare is OpenAI's latest image model, the fastest and suited for everyday high-quality image generation. It accepts text and image inputs and produces image outputs. The model supports quality settings: low, medium, high, xhigh, max, and auto.",
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "pricing": {
+              "cache_read": 1.25,
+              "input": 5,
+              "output": 30
+            },
+            "source": "public-provider-conf",
+            "typeHints": [
+              "image_generation"
+            ]
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ]
+          },
+          "name": "gpt-image-2.5-flare",
+          "reasoning": {
+            "supported": false
+          },
+          "tool_call": false,
+          "type": "image-generation",
+          "vision": true
+        },
+        {
+          "cost": {
+            "cache_read": 1.25,
+            "input": 5,
+            "output": 30
+          },
+          "display_name": "gpt-image-2.5-sunburst",
+          "id": "gpt-image-2.5-sunburst",
+          "limit": {
+            "context": 8192,
+            "output": 8192
+          },
+          "metadata": {
+            "description": "GPT Image 2.5 Sunburst is OpenAI's latest image model, capable of generating and editing images from text and image inputs. It is suitable for workflows that require extremely high editing precision. The model supports quality settings: low, medium, high, xhigh, max, and auto.",
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "pricing": {
+              "cache_read": 1.25,
+              "input": 5,
+              "output": 30
+            },
+            "source": "public-provider-conf",
+            "typeHints": [
+              "image_generation"
+            ]
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ]
+          },
+          "name": "gpt-image-2.5-sunburst",
+          "reasoning": {
+            "supported": false
+          },
+          "tool_call": false,
+          "type": "image-generation",
+          "vision": true
         }
       ],
       "name": "OpenAI"
