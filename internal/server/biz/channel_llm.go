@@ -209,21 +209,29 @@ func (svc *ChannelService) buildChannelWithOutbounds(c *ent.Channel, apiKeyOverr
 		return nil, err
 	}
 
-	defaultEndpoints := DefaultEndpointsForChannelType(c.Type)
-	userEndpoints := c.Endpoints
+	defaultEndpoints := ch.DefaultEndpoints()
+	rawUserEndpoints := c.Endpoints
+	userEndpoints := NormalizeEndpoints(c.Endpoints, c.BaseURL)
 
 	if len(defaultEndpoints) == 0 && len(userEndpoints) == 0 {
 		return ch, nil
 	}
 
 	outbounds := make(map[string]transformer.Outbound)
+	type outboundAlias struct {
+		format string
+		out    transformer.Outbound
+	}
+	var aliases []outboundAlias
 
 	for _, ep := range defaultEndpoints {
 		if ep.APIFormat == "" {
 			continue
 		}
 
-		if c.Type != channel.TypeXai || ep.APIFormat == ch.Outbound.APIFormat().String() {
+		if (c.Type == channel.TypeXai && ep.APIFormat == ch.Outbound.APIFormat().String() || c.Type != channel.TypeXai) &&
+			(c.Type != channel.TypeCodex || !isNativeImageFormat(ep.APIFormat)) &&
+			(c.Type != channel.TypeCodex || !isResponsesEndpoint(ep.APIFormat) || ep.APIFormat == ch.Outbound.APIFormat().String()) {
 			outbounds[ep.APIFormat] = ch.Outbound
 			continue
 		}
@@ -235,7 +243,7 @@ func (svc *ChannelService) buildChannelWithOutbounds(c *ent.Channel, apiKeyOverr
 		outbounds[ep.APIFormat] = out
 	}
 
-	for _, ep := range userEndpoints {
+	for i, ep := range userEndpoints {
 		if ep.APIFormat == "" {
 			continue
 		}
@@ -247,6 +255,14 @@ func (svc *ChannelService) buildChannelWithOutbounds(c *ent.Channel, apiKeyOverr
 			out = opencode.WithSessionHeader(out)
 		}
 		outbounds[ep.APIFormat] = out
+		if rawFormat := rawUserEndpoints[i].APIFormat; rawFormat != "" && rawFormat != ep.APIFormat {
+			aliases = append(aliases, outboundAlias{format: rawFormat, out: out})
+		}
+	}
+	for _, alias := range aliases {
+		if _, exists := outbounds[alias.format]; !exists {
+			outbounds[alias.format] = alias.out
+		}
 	}
 
 	if len(outbounds) == 0 {
@@ -259,6 +275,9 @@ func (svc *ChannelService) buildChannelWithOutbounds(c *ent.Channel, apiKeyOverr
 }
 
 func endpointTransport(ep objects.ChannelEndpoint) string {
+	if ep.APIFormat == llm.APIFormatOpenAIResponseWebSocket.String() {
+		return objects.ChannelEndpointTransportWebSocket
+	}
 	if ep.Transport != "" {
 		return ep.Transport
 	}
@@ -287,6 +306,13 @@ func primaryEndpointTransport(c *ent.Channel, apiFormat string) string {
 
 		return endpointTransport(ep)
 	}
+	if apiFormat == llm.APIFormatOpenAIResponse.String() {
+		for _, ep := range c.Endpoints {
+			if ep.APIFormat == llm.APIFormatOpenAIResponseWebSocket.String() {
+				return objects.ChannelEndpointTransportWebSocket
+			}
+		}
+	}
 
 	return endpointTransport(objects.ChannelEndpoint{BaseURL: c.BaseURL})
 }
@@ -298,22 +324,25 @@ func (svc *ChannelService) buildCodexOutbound(
 	transport string,
 	alphaSearchPath string,
 	httpClient *httpclient.HttpClient,
+	endpointPath ...string,
 ) (transformer.Outbound, error) {
-	imageMainModel := strings.TrimSpace(c.DefaultTestModel)
-	if imageMainModel != "" {
-		modelChannel := ch
-		if modelChannel == nil {
-			modelChannel = &Channel{Channel: c}
-		}
-		modelKey := imageMainModel
-		if c.Settings != nil && c.Settings.LowercaseModelID {
-			modelKey = strings.ToLower(modelKey)
-		}
-		if mapped, err := modelChannel.ChooseModel(modelKey); err == nil {
-			imageMainModel = mapped
-		}
-	}
+	return svc.buildCodexOutboundWithRefresh(c, ch, baseURL, transport, alphaSearchPath, httpClient, svc.onTokenRefreshed(c), endpointPath...)
+}
 
+func (svc *ChannelService) buildCodexOutboundWithRefresh(
+	c *ent.Channel,
+	ch *Channel,
+	baseURL string,
+	transport string,
+	alphaSearchPath string,
+	httpClient *httpclient.HttpClient,
+	onRefreshed func(context.Context, *oauth.OAuthCredentials) error,
+	endpointPath ...string,
+) (transformer.Outbound, error) {
+	path := ""
+	if len(endpointPath) > 0 {
+		path = endpointPath[0]
+	}
 	if c.Credentials.IsOAuth() {
 		if ch != nil {
 			if existing, ok := ch.Outbound.(*codex.OutboundTransformer); ok {
@@ -323,10 +352,51 @@ func (svc *ChannelService) buildCodexOutbound(
 						BaseURL:         baseURL,
 						Transport:       transport,
 						AlphaSearchPath: alphaSearchPath,
-						ImageMainModel:  imageMainModel,
+						EndpointPath:    path,
 					})
 				}
 			}
+		}
+
+		// Detached callers (the Codex model catalog) have no Channel to rotate
+		// credentials over and need a plain provider they can rebind to another
+		// HTTP client, so build one directly from the channel credentials.
+		if ch == nil {
+			credsJSON := strings.TrimSpace(c.Credentials.APIKey)
+			if c.Credentials.OAuth != nil {
+				o := c.Credentials.OAuth
+
+				creds, err := (&oauth.OAuthCredentials{
+					AccessToken:  o.AccessToken,
+					RefreshToken: o.RefreshToken,
+					ClientID:     o.ClientID,
+					ExpiresAt:    o.ExpiresAt,
+					TokenType:    o.TokenType,
+					Scopes:       o.Scopes,
+				}).ToJSON()
+				if err != nil {
+					return nil, fmt.Errorf("failed to encode codex oauth credentials: %w", err)
+				}
+
+				credsJSON = creds
+			}
+
+			creds, err := oauth.ParseCredentialsJSON(credsJSON)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse codex oauth credentials: %w", err)
+			}
+
+			return codex.NewOutboundTransformer(codex.Params{
+				TokenProvider: codex.NewTokenProvider(codex.TokenProviderParams{
+					Credentials: creds,
+					HTTPClient:  httpClient,
+					OnRefreshed: onRefreshed,
+				}),
+				BaseURL:         baseURL,
+				Transport:       transport,
+				AlphaSearchPath: alphaSearchPath,
+				EndpointPath:    path,
+			})
 		}
 
 		tokens, err := svc.assembleOAuthTokenProvider(c, ch,
@@ -343,7 +413,7 @@ func (svc *ChannelService) buildCodexOutbound(
 			return nil, fmt.Errorf("failed to build codex oauth token providers: %w", err)
 		}
 
-		if ch != nil && ch.startTokenProvider == nil {
+		if ch.startTokenProvider == nil {
 			setupAutoRefresh(ch, tokens, oauth.AutoRefreshOptions{})
 		}
 
@@ -352,7 +422,7 @@ func (svc *ChannelService) buildCodexOutbound(
 			BaseURL:         baseURL,
 			Transport:       transport,
 			AlphaSearchPath: alphaSearchPath,
-			ImageMainModel:  imageMainModel,
+			EndpointPath:    path,
 		})
 	}
 
@@ -364,7 +434,7 @@ func (svc *ChannelService) buildCodexOutbound(
 		BaseURL:         baseURL,
 		Transport:       transport,
 		AlphaSearchPath: alphaSearchPath,
-		ImageMainModel:  imageMainModel,
+		EndpointPath:    path,
 	})
 }
 
@@ -391,6 +461,13 @@ func (svc *ChannelService) buildNonDefaultEndpointOutbound(
 		if err := validateCommandCodeBaseURL(baseURL); err != nil {
 			return nil, err
 		}
+	}
+	if isNativeImageFormat(ep.APIFormat) && c.Type == channel.TypeCodex && ep.Transport != objects.ChannelEndpointTransportWebSocket {
+		primary, ok := ch.Outbound.(*codex.OutboundTransformer)
+		if !ok {
+			return nil, fmt.Errorf("channel %s requires a Codex outbound for Images", c.Name)
+		}
+		return codex.NewImageOutboundTransformer(codex.ImageParams{TokenProvider: primary.TokenProvider(), BaseURL: baseURL, EndpointPath: ep.Path})
 	}
 	if endpointTransport(ep) == objects.ChannelEndpointTransportWebSocket && !supportsWebSocketTransport(ep.APIFormat) {
 		return nil, fmt.Errorf("websocket transport only supports api_format %q", llm.APIFormatOpenAIResponse.String())
@@ -431,10 +508,12 @@ func (svc *ChannelService) buildNonDefaultEndpointOutbound(
 			EndpointPath:   ep.Path,
 		})
 	case llm.APIFormatOpenAIResponse.String(),
+		llm.APIFormatOpenAIResponseWebSocket.String(),
 		llm.APIFormatOpenAIResponseCompact.String():
 		transport := endpointTransport(ep)
-		if (c.Type == channel.TypeCodex || c.Type == channel.TypeFenno) && ep.APIFormat == llm.APIFormatOpenAIResponse.String() {
-			return svc.buildCodexOutbound(c, ch, baseURL, transport, "", ch.HTTPClient)
+		if (c.Type == channel.TypeCodex || c.Type == channel.TypeFenno) &&
+			(ep.APIFormat == llm.APIFormatOpenAIResponse.String() || ep.APIFormat == llm.APIFormatOpenAIResponseWebSocket.String()) {
+			return svc.buildCodexOutbound(c, ch, baseURL, transport, "", ch.HTTPClient, ep.Path)
 		}
 
 		return responses.NewOutboundTransformerWithConfig(&responses.Config{
@@ -475,13 +554,6 @@ func (svc *ChannelService) buildNonDefaultEndpointOutbound(
 				EndpointPath:   ep.Path,
 				APIKeyProvider: apiKeyProvider(),
 			})
-		}
-		if (c.Type == channel.TypeCodex || c.Type == channel.TypeFenno) &&
-			(ep.APIFormat == llm.APIFormatOpenAIImageGeneration.String() ||
-				ep.APIFormat == llm.APIFormatOpenAIImageEdit.String()) {
-			transport := endpointTransport(ep)
-
-			return svc.buildCodexOutbound(c, ch, baseURL, transport, "", ch.HTTPClient)
 		}
 
 		return openai.NewOutboundTransformerWithConfig(&openai.Config{
@@ -1422,6 +1494,10 @@ func extractProjectIDFromAntigravityCreds(apiKey string) (string, error) {
 }
 
 func (svc *ChannelService) refreshOAuthToken(ctx context.Context, ch *ent.Channel, refreshed *oauth.OAuthCredentials) error {
+	return svc.refreshOAuthTokenWithClient(ctx, svc.entFromContext(ctx), ch, refreshed)
+}
+
+func (svc *ChannelService) refreshOAuthTokenWithClient(ctx context.Context, db *ent.Client, ch *ent.Channel, refreshed *oauth.OAuthCredentials) error {
 	if refreshed == nil {
 		return nil
 	}
@@ -1448,9 +1524,78 @@ func (svc *ChannelService) refreshOAuthToken(ctx context.Context, ch *ent.Channe
 
 	updated.OAuth = refreshed
 
-	_, err := svc.entFromContext(ctx).Channel.UpdateOneID(ch.ID).SetCredentials(updated).Save(ctx)
+	for {
+		saved, err := db.Channel.UpdateOneID(ch.ID).Where(channel.UpdatedAt(ch.UpdatedAt)).SetCredentials(updated).Save(ctx)
+		if ent.IsNotFound(err) {
+			current, reloadErr := db.Channel.Get(ctx, ch.ID)
+			if reloadErr != nil {
+				return fmt.Errorf("failed to reconcile channel credentials after concurrent update: %w", reloadErr)
+			}
+			unchanged := current.Type == ch.Type && channelCredentialsEqual(current.Credentials, ch.Credentials)
+			ch.Credentials = current.Credentials
+			ch.UpdatedAt = current.UpdatedAt
+			if unchanged {
+				// A metadata-only update must not discard a rotated refresh token.
+				continue
+			}
 
-	return err
+			var winner *oauth.OAuthCredentials
+			if current.Type == ch.Type && current.Credentials.IsOAuth() {
+				winner, reloadErr = current.Credentials.ResolveOAuthCredentials()
+				if reloadErr != nil {
+					return &oauth.CredentialConflictError{}
+				}
+			}
+			return &oauth.CredentialConflictError{Credentials: winner}
+		}
+		if err != nil {
+			return err
+		}
+
+		ch.Credentials = saved.Credentials
+		ch.UpdatedAt = saved.UpdatedAt
+
+		return nil
+	}
+}
+
+func channelCredentialsEqual(a, b objects.ChannelCredentials) bool {
+	return a.APIKey == b.APIKey &&
+		oauthCredentialsEqual(a.OAuth, b.OAuth) &&
+		slices.Equal(a.APIKeys, b.APIKeys) &&
+		a.ManagementAPIKey == b.ManagementAPIKey &&
+		azureCredentialsEqual(a.Azure, b.Azure) &&
+		gcpCredentialsEqual(a.GCP, b.GCP)
+}
+
+func oauthCredentialsEqual(a, b *objects.OAuthCredentials) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return a.ClientID == b.ClientID &&
+		a.AccessToken == b.AccessToken &&
+		a.RefreshToken == b.RefreshToken &&
+		a.IDToken == b.IDToken &&
+		a.ExpiresAt.Equal(b.ExpiresAt) &&
+		a.TokenType == b.TokenType &&
+		slices.Equal(a.Scopes, b.Scopes)
+}
+
+func azureCredentialsEqual(a, b *objects.AzureCredential) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return a.APIVersion == b.APIVersion
+}
+
+func gcpCredentialsEqual(a, b *objects.GCPCredential) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return a.Region == b.Region && a.ProjectID == b.ProjectID && a.JSONData == b.JSONData
 }
 
 // refreshOAuthCredentialEntry persists a refreshed token back into the named

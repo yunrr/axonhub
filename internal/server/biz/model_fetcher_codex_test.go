@@ -52,10 +52,17 @@ func TestModelFetcher_CodexCatalog(t *testing.T) {
 			require.Equal(t, 1, calls)
 			require.Equal(t, tt.fallback, result.Fallback)
 			require.Nil(t, result.Error)
+			imageModelCount := 0
+			for _, model := range result.Models {
+				if model.ID == "gpt-image-2" {
+					imageModelCount++
+				}
+			}
+			require.Equal(t, 1, imageModelCount)
 			if tt.fallback {
 				require.Len(t, result.Models, len(codex.DefaultModels()))
 			} else {
-				require.Equal(t, []ModelIdentify{{ID: "first-astra"}, {ID: "new-sol"}}, result.Models)
+				require.Equal(t, []ModelIdentify{{ID: "first-astra"}, {ID: "new-sol"}, {ID: "gpt-image-2"}}, result.Models)
 			}
 		})
 	}
@@ -129,7 +136,11 @@ func TestModelFetcher_CodexStoredCredentialReplacement(t *testing.T) {
 				require.Nil(t, result.Error)
 				require.Equal(t, 1, calls)
 				require.False(t, result.Fallback)
-				require.Equal(t, []ModelIdentify{{ID: "new-model"}}, result.Models)
+				want := []ModelIdentify{{ID: "new-model"}, {ID: "gpt-image-2"}}
+				if mode == "replace-api-key" {
+					want = []ModelIdentify{{ID: "new-model"}}
+				}
+				require.Equal(t, want, result.Models)
 			}
 			saved, err := db.Channel.Get(ctx, ch.ID)
 			require.NoError(t, err)
@@ -190,7 +201,7 @@ func TestModelFetcher_CodexCatalogNamedOAuthEntries(t *testing.T) {
 			require.NoError(t, err)
 			require.Nil(t, result.Error)
 			require.False(t, result.Fallback)
-			require.Equal(t, []ModelIdentify{{ID: "entry-model"}}, result.Models)
+			require.Equal(t, []ModelIdentify{{ID: "entry-model"}, {ID: "gpt-image-2"}}, result.Models)
 
 			if tt.refreshResponse == "" {
 				require.Equal(t, 1, calls)
@@ -246,7 +257,7 @@ func TestModelFetcher_CodexRawCLIAuthJSON(t *testing.T) {
 	require.Equal(t, 1, calls)
 	require.Nil(t, result.Error)
 	require.False(t, result.Fallback)
-	require.Equal(t, []ModelIdentify{{ID: "cli-model"}}, result.Models)
+	require.Equal(t, []ModelIdentify{{ID: "cli-model"}, {ID: "gpt-image-2"}}, result.Models)
 }
 
 func TestModelFetcher_CodexRelayModels(t *testing.T) {
