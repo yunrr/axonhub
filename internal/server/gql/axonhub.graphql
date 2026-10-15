@@ -317,6 +317,7 @@ type ChannelRateLimit {
 type ChannelCredentials {
   apiKey: String
   apiKeys: [String!]
+  vertexApiKeys: [VertexAPIKey!]
   gcp: GCPCredential
   oauth: OAuthCredentials
   oauths: [NamedOAuthCredentials!]
@@ -346,6 +347,12 @@ type NamedOAuthCredentials {
   credentials: OAuthCredentials
 }
 
+type VertexAPIKey {
+  projectID: String!
+  apiKey: String!
+  region: String!
+}
+
 type GCPCredential {
   region: String!
   projectID: String!
@@ -355,6 +362,7 @@ type GCPCredential {
 input ChannelCredentialsInput {
   apiKey: String
   apiKeys: [String!]
+  vertexApiKeys: [VertexAPIKeyInput!]
   gcp: GCPCredentialInput
   oauth: OAuthCredentialsInput
   oauths: [NamedOAuthCredentialsInput!]
@@ -375,6 +383,12 @@ input NamedOAuthCredentialsInput {
   name: String
   projectId: String
   credentials: OAuthCredentialsInput
+}
+
+input VertexAPIKeyInput {
+  projectID: String!
+  apiKey: String!
+  region: String!
 }
 
 input GCPCredentialInput {
@@ -658,6 +672,8 @@ input FetchModelsInput {
   channelType: String!
   baseURL: String!
   apiKey: String
+  projectID: String
+  region: String
   channelID: ID
 }
 
