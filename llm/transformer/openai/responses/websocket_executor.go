@@ -1091,8 +1091,18 @@ func buildWebSocketCreatePayload(body []byte) (map[string]any, error) {
 func applyWebSocketAuth(headers http.Header, auth *httpclient.AuthConfig) error {
 	switch auth.Type {
 	case httpclient.AuthTypeBearer:
+		// A channel without a key dials unauthenticated; sending an empty bearer
+		// token would be rejected instead of reaching a no-auth upstream.
+		if auth.APIKey == "" {
+			return nil
+		}
+
 		headers.Set("Authorization", "Bearer "+auth.APIKey)
 	case httpclient.AuthTypeAPIKey:
+		if auth.APIKey == "" {
+			return nil
+		}
+
 		if auth.HeaderKey == "" {
 			return fmt.Errorf("api key header is required")
 		}

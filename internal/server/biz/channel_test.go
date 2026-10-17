@@ -785,21 +785,21 @@ func TestChannelService_BulkImportChannels(t *testing.T) {
 			wantErrorsLen: 1,
 		},
 		{
-			name: "import with missing API key",
+			name: "import without an API key creates an unauthenticated channel",
 			items: []*BulkImportChannelItem{
 				{
 					Type:             "openai",
-					Name:             "Missing APIKey",
+					Name:             "Keyless Channel",
 					BaseURL:          lo.ToPtr("https://api.openai.com/v1"),
 					APIKey:           nil,
 					SupportedModels:  []string{"gpt-4"},
 					DefaultTestModel: "gpt-4",
 				},
 			},
-			wantSuccess:   false,
-			wantCreated:   0,
-			wantFailed:    1,
-			wantErrorsLen: 1,
+			wantSuccess:   true,
+			wantCreated:   1,
+			wantFailed:    0,
+			wantErrorsLen: 0,
 		},
 		{
 			name: "partial success - some valid, some invalid",

@@ -423,8 +423,9 @@ function getFetchModelsApiKey(input: {
   return parseOauthToken(oauthApiKey) || plainApiKey;
 }
 
-// Third-party Codex rejects an empty or OAuth-shaped credential so a save can
-// never persist a channel that still authenticates with the inherited JSON.
+// Third-party Codex rejects an OAuth-shaped credential so a save can never
+// persist a channel that still authenticates with the inherited JSON. An empty
+// credential is allowed: the channel then reaches its relay unauthenticated.
 function getCodexThirdPartyCredentialError(channel: {
   type?: string | null;
   authMode: string;
@@ -433,9 +434,6 @@ function getCodexThirdPartyCredentialError(channel: {
   if (channel.type !== 'codex' || channel.authMode !== 'third-party') return undefined;
 
   const apiKeys = (channel.apiKeys || []).map((key) => (key || '').trim()).filter((key) => key.length > 0);
-  if (apiKeys.length === 0) {
-    return 'channels.dialogs.oauth.errors.codexThirdPartyApiKeyRequired';
-  }
   if (apiKeys.some((key) => key.startsWith('{'))) {
     return 'channels.dialogs.oauth.errors.codexThirdPartyApiKeyInvalid';
   }

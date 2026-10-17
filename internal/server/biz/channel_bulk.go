@@ -508,11 +508,11 @@ func (svc *ChannelService) BulkImportChannels(ctx context.Context, items []*Bulk
 			continue
 		}
 
-		if item.APIKey == nil || *item.APIKey == "" {
-			errors = append(errors, fmt.Sprintf("Row %d (%s): API Key is required", i+1, item.Name))
-			failed++
-
-			continue
+		// The API key column is optional: a row may target an upstream that needs
+		// no authentication, so only the base URL is mandatory.
+		credentials := objects.ChannelCredentials{}
+		if item.APIKey != nil {
+			credentials.APIKey = *item.APIKey
 		}
 
 		var ch *ent.Channel
@@ -521,7 +521,7 @@ func (svc *ChannelService) BulkImportChannels(ctx context.Context, items []*Bulk
 				SetType(channelType).
 				SetName(item.Name).
 				SetBaseURL(*item.BaseURL).
-				SetCredentials(objects.ChannelCredentials{APIKey: *item.APIKey}).
+				SetCredentials(credentials).
 				SetSupportedModels(item.SupportedModels).
 				SetDefaultTestModel(item.DefaultTestModel).
 				Save(ctx)

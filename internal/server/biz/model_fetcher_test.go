@@ -818,11 +818,67 @@ func TestFetchModelsWithChannelIDRejectsStoredCredentialForChangedEndpoint(t *te
 	if err != nil {
 		t.Fatalf("FetchModels() unexpected error: %v", err)
 	}
-	if result.Error == nil || !strings.Contains(*result.Error, "API key is required") {
-		t.Fatalf("FetchModels() expected API key required error, got: %#v", result.Error)
+	if result.Error == nil || !strings.Contains(*result.Error, "cannot reuse the stored API key") {
+		t.Fatalf("FetchModels() expected stored-credential reuse error, got: %#v", result.Error)
 	}
 	if got := attackerCalls.Load(); got != 0 {
 		t.Fatalf("attacker endpoint was called %d times", got)
+	}
+}
+
+func TestFetchModelsWithChannelIDFetchesKeylessChannelAfterEndpointChange(t *testing.T) {
+	var calls atomic.Int32
+	var authHeader string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		authHeader = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"relay-model"}]}`))
+	}))
+	defer upstream.Close()
+
+	client := enttest.NewEntClient(t, "sqlite3", "file:fetch_models_keyless_changed_endpoint?mode=memory&_fk=0")
+	defer client.Close()
+
+	ctx := authz.WithSystemBypass(context.Background(), "test")
+	ch, err := client.Channel.Create().
+		SetName("keyless-endpoint").
+		SetType(channel.TypeOpenai).
+		SetBaseURL("http://127.0.0.1:1/v1").
+		SetCredentials(objects.ChannelCredentials{}).
+		SetSupportedModels([]string{"relay-model"}).
+		SetDefaultTestModel("relay-model").
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to create channel: %v", err)
+	}
+
+	fetcher := NewModelFetcher(
+		httpclient.NewHttpClientWithClient(upstream.Client()),
+		&ChannelService{AbstractService: &AbstractService{db: client}},
+	)
+
+	// The channel has no credential to protect, so a changed base URL must still
+	// be reachable — unauthenticated — instead of failing on a missing key.
+	result, err := fetcher.FetchModels(ctx, FetchModelsInput{
+		ChannelType: channel.TypeOpenai.String(),
+		BaseURL:     upstream.URL,
+		ChannelID:   &ch.ID,
+	})
+	if err != nil {
+		t.Fatalf("FetchModels() unexpected error: %v", err)
+	}
+	if result.Error != nil {
+		t.Fatalf("FetchModels() unexpected result error: %v", *result.Error)
+	}
+	if len(result.Models) != 1 || result.Models[0].ID != "relay-model" {
+		t.Fatalf("unexpected models: %#v", result.Models)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("upstream endpoint called %d times, want 1", got)
+	}
+	if authHeader != "" {
+		t.Fatalf("keyless fetch must not send Authorization, got %q", authHeader)
 	}
 }
 

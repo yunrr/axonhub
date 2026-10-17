@@ -183,6 +183,18 @@ func getAPIKeyProvider(ch *Channel) auth.APIKeyProvider {
 	return auth.NewStaticKeyProvider("")
 }
 
+// getOAuthTokenProvider adapts the channel API key into the token getter the
+// Codex and Claude Code outbounds expect. A channel with no configured key at
+// all has nothing to adapt, so it yields empty credentials and the shared HTTP
+// auth layer omits the Authorization header instead of failing the request.
+func getOAuthTokenProvider(ch *Channel) oauth.TokenGetter {
+	if ch.apiKeyOverride == "" && len(ch.Credentials.GetAllAPIKeys()) == 0 {
+		return oauth.NewStaticTokenProvider(&oauth.OAuthCredentials{})
+	}
+
+	return oauth.NewAPIKeyTokenProvider(getAPIKeyProvider(ch).Get)
+}
+
 // BuildOutboundByAPIFormat returns the outbound transformer for a resolved endpoint API format.
 // If the channel does not support the format, returns an error.
 func BuildOutboundByAPIFormat(ch *Channel, apiFormat string) (transformer.Outbound, error) {
@@ -428,8 +440,7 @@ func (svc *ChannelService) buildCodexOutboundWithRefresh(
 		})
 	}
 
-	apiKeyProvider := getAPIKeyProvider(ch)
-	tokens := oauth.NewAPIKeyTokenProvider(apiKeyProvider.Get)
+	tokens := getOAuthTokenProvider(ch)
 
 	return codex.NewOutboundTransformer(codex.Params{
 		TokenProvider:   tokens,
@@ -707,9 +718,6 @@ func validateCommandCodeBaseURL(rawURL string) error {
 //nolint:maintidx // Checked.
 func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOverride ...string) (*Channel, error) {
 	// Validate credentials required by channel types with provider-specific authentication.
-	//
-	// NOTE: "enabled" keys excludes keys that were explicitly disabled for this channel.
-	enabledKeys := c.Credentials.GetEnabledAPIKeys(c.DisabledAPIKeys)
 	overrideAPIKey := ""
 	if len(apiKeyOverride) > 0 {
 		overrideAPIKey = strings.TrimSpace(apiKeyOverride[0])
@@ -718,16 +726,18 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 	//nolint:exhaustive // Checked.
 	switch c.Type {
 	case channel.TypeCodex, channel.TypeClaudecode:
-		if !c.Credentials.IsOAuth() && len(enabledKeys) == 0 {
-			return nil, fmt.Errorf("missing credentials: oauth or api key required for channel %s", c.Name)
-		}
+		// Both types support OAuth and third-party relays. A relay may run
+		// without authentication, so a channel with neither OAuth nor an API
+		// key still builds: it is treated as the third-party flavour and the
+		// outbound omits the Authorization header.
 	case channel.TypeGithubCopilot, channel.TypeXaiSubscription:
 		if !c.Credentials.IsOAuth() {
 			return nil, fmt.Errorf("missing oauth credentials for channel %s", c.Name)
 		}
 	case channel.TypeAntigravity:
 		// Antigravity keeps either the legacy "refreshToken|projectID" composite
-		// in APIKey or named OAuth credential entries in OAuths.
+		// in APIKey or named OAuth credential entries in OAuths. Its protocol has
+		// no unauthenticated mode, so credentials stay required.
 		if strings.TrimSpace(c.Credentials.APIKey) == "" && len(c.Credentials.OAuths) == 0 {
 			return nil, fmt.Errorf("missing api key for channel %s", c.Name)
 		}
@@ -740,11 +750,10 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 		// (channel key test flow) may also supply a key when none are stored,
 		// so skip the stored-key check here.
 	case channel.TypeCommandcode, channel.TypeCommandcodeAnthropic:
-		// Command Code inference always authenticates with a Bearer API key;
-		// the quota collection cookie is never an inference credential.
-		if len(enabledKeys) == 0 && overrideAPIKey == "" {
-			return nil, fmt.Errorf("missing api key for channel %s", c.Name)
-		}
+		// Command Code normally authenticates inference with a Bearer API key
+		// (the quota collection cookie is never an inference credential), but a
+		// keyless deployment is allowed: the outbound omits the header and lets
+		// the upstream decide.
 	default:
 		// Remaining channel types (OpenAI/Anthropic/Gemini-compatible relays,
 		// local gateways, ...) may be deployed without authentication, so a
@@ -1021,9 +1030,9 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 			return ch, nil
 		}
 
-		// Non-OAuth: use APIKeyProvider for multi-key rotation support
-		apiKeyProvider := getAPIKeyProvider(ch)
-		tokens := oauth.NewAPIKeyTokenProvider(apiKeyProvider.Get)
+		// Non-OAuth: use APIKeyProvider for multi-key rotation support; a
+		// keyless channel gets empty credentials and sends no Authorization.
+		tokens := getOAuthTokenProvider(ch)
 
 		transformer, err := claudecode.NewOutboundTransformer(claudecode.Params{
 			TokenProvider:   tokens,

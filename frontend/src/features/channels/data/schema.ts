@@ -956,7 +956,8 @@ export const bulkImportChannelItemSchema = z.object({
   type: channelTypeSchema,
   name: z.string().min(1, 'Name is required'),
   baseURL: z.string().url('Please enter a valid URL').min(1, 'Base URL is required'),
-  apiKey: z.string().min(1, 'API Key is required'),
+  // Optional: the row may target an upstream that needs no authentication.
+  apiKey: z.string(),
   supportedModels: z.array(z.string()).min(1, 'At least one supported model is required'),
   defaultTestModel: z.string().min(1, 'Please select a default test model'),
 });

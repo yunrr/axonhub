@@ -33,7 +33,11 @@ func ModelsRequest(ctx context.Context, tokens oauth.TokenGetter, baseURL string
 		baseURL = codexBaseURL
 	}
 	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+creds.AccessToken)
+	// A keyless channel carries no bearer token; discover its catalog
+	// unauthenticated instead of sending an empty Authorization header.
+	if creds.AccessToken != "" {
+		headers.Set("Authorization", "Bearer "+creds.AccessToken)
+	}
 	headers.Set("Accept", "application/json")
 	headers.Set("Version", codexDefaultVersion)
 	headers.Set("Originator", AxonHubOriginator)

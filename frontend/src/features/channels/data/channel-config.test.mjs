@@ -395,3 +395,11 @@ test('Ollama has localized channel, provider, and cookie-field labels', () => {
     assert.ok(channels['channels.dialogs.fields.ollamaQuota.authCookie.description']);
   }
 });
+
+test('bulk import accepts a row without an API key', () => {
+  const schema = read('features/channels/data/schema.ts');
+  const dialog = read('features/channels/components/channels-bulk-import-dialog.tsx');
+
+  assert.match(schema, /bulkImportChannelItemSchema[\s\S]*?apiKey:\s*z\.string\(\),/, 'bulk import apiKey must be optional');
+  assert.doesNotMatch(dialog, /bulkImport\.apiKeyRequired/, 'the dialog must not reject a keyless row');
+});

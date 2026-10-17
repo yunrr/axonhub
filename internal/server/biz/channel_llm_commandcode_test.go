@@ -145,7 +145,7 @@ func TestCommandCodeOutboundRouting(t *testing.T) {
 		require.Equal(t, "X-API-Key", httpReq.Auth.HeaderKey)
 	})
 
-	t.Run("commandcode types require an enabled API key", func(t *testing.T) {
+	t.Run("commandcode types allow a keyless channel", func(t *testing.T) {
 		for _, typ := range []channel.Type{channel.TypeCommandcode, channel.TypeCommandcodeAnthropic} {
 			c := &ent.Channel{
 				ID:          6,
@@ -154,9 +154,9 @@ func TestCommandCodeOutboundRouting(t *testing.T) {
 				BaseURL:     base,
 				Credentials: objects.ChannelCredentials{},
 			}
-			_, err := svc.buildChannelWithOutbounds(c)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "missing api key")
+			ch, err := svc.buildChannelWithOutbounds(c)
+			require.NoError(t, err)
+			require.NotNil(t, ch.Outbound)
 		}
 	})
 	t.Run("explicit API key override can use a disabled configured key", func(t *testing.T) {

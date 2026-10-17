@@ -707,10 +707,6 @@ func (svc *BackupService) restoreChannels(ctx context.Context, db *ent.Client, c
 		}
 
 		credentials := chData.Credentials
-		// Check if credentials are empty (no API key and no OAuth)
-		if credentials.APIKey == "" && len(credentials.APIKeys) == 0 && credentials.OAuth == nil {
-			continue
-		}
 
 		var baseURL *string
 		if chData.BaseURL != "" {

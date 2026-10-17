@@ -92,11 +92,6 @@ export function ChannelsBulkImportDialog({ isOpen, onClose }: ChannelsBulkImport
         return;
       }
 
-      if (!apiKey || apiKey.trim() === '') {
-        errors.push(t('channels.dialogs.bulkImport.apiKeyRequired', { line: index + 1 }));
-        return;
-      }
-
       const supportedModels = supportedModelsStr
         ? supportedModelsStr
             .split('|')

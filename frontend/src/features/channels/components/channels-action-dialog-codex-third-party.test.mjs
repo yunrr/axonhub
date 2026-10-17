@@ -101,21 +101,20 @@ test('non-Codex providers keep their OAuth credential preference when fetching m
   assert.equal(getFetchModelsApiKey({ type: 'codex', authMode: 'third-party', oauthApiKey: '', apiKeys: ['  sk-synthetic  '] }), 'sk-synthetic');
 });
 
-test('an empty or OAuth-JSON third-party credential is rejected instead of saved', async () => {
+test('an OAuth-JSON third-party credential is rejected and a keyless channel is allowed', async () => {
   const { getCodexThirdPartyCredentialError } = await loadDialogHelpers();
 
-  const requiredKey = 'channels.dialogs.oauth.errors.codexThirdPartyApiKeyRequired';
   const invalidKey = 'channels.dialogs.oauth.errors.codexThirdPartyApiKeyInvalid';
 
   assert.equal(
     getCodexThirdPartyCredentialError({ type: 'codex', authMode: 'third-party', apiKeys: [] }),
-    requiredKey,
-    'an empty third-party credential must be rejected'
+    undefined,
+    'a keyless third-party channel must be allowed'
   );
   assert.equal(
     getCodexThirdPartyCredentialError({ type: 'codex', authMode: 'third-party', apiKeys: ['   ', ''] }),
-    requiredKey,
-    'blank keys must not count as a credential'
+    undefined,
+    'blank keys are not credentials and must not block the save'
   );
   assert.equal(
     getCodexThirdPartyCredentialError({ type: 'codex', authMode: 'third-party', apiKeys: [OAUTH_JSON] }),
@@ -140,7 +139,6 @@ test('an empty or OAuth-JSON third-party credential is rejected instead of saved
 
   for (const locale of ['en', 'zh-CN']) {
     const messages = JSON.parse(readFileSync(new URL(`../../../locales/${locale}/channels.json`, import.meta.url), 'utf8'));
-    assert.ok(messages[requiredKey], `${locale} required-key error missing`);
     assert.ok(messages[invalidKey], `${locale} invalid-key error missing`);
   }
 });

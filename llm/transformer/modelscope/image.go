@@ -129,25 +129,26 @@ func (t *OutboundTransformer) buildImageRequest(ctx context.Context, req *llm.Re
 	headers.Set("X-ModelScope-Async-Mode", "true")
 
 	// Resolve the key once: the task is created with it, so polling and download
-	// must reuse exactly this key rather than resolving a new one per call.
+	// must reuse exactly this key rather than resolving a new one per call. An
+	// empty key means the upstream needs no authentication, so the request goes
+	// out without an Authorization header.
 	apiKey := t.apiKeyProvider.Get(ctx)
-	if apiKey == "" {
-		return nil, fmt.Errorf("%w: no API key available for ModelScope image request", transformer.ErrInvalidRequest)
-	}
 
 	httpReq := &httpclient.Request{
 		Method:  http.MethodPost,
 		URL:     strings.TrimRight(t.baseURL, "/") + modelScopeImagePath,
 		Headers: headers,
 		Body:    payload,
-		Auth: &httpclient.AuthConfig{
-			Type:   httpclient.AuthTypeBearer,
-			APIKey: apiKey,
-		},
 		// The provider-facing format is the ModelScope one so the async task
 		// response is never mistaken for a ready-to-use OpenAI image response.
 		RequestType: llm.RequestTypeImage.String(),
 		APIFormat:   llm.APIFormatModelScopeImage.String(),
+	}
+	if apiKey != "" {
+		httpReq.Auth = &httpclient.AuthConfig{
+			Type:   httpclient.AuthTypeBearer,
+			APIKey: apiKey,
+		}
 	}
 	httpReq.TransformerMetadata = map[string]any{
 		"model":             req.Model,
@@ -293,7 +294,9 @@ func (t *OutboundTransformer) getImageTask(ctx context.Context, apiKey, taskURL 
 	}
 
 	httpReq.Header = headers
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {

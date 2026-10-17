@@ -361,6 +361,43 @@ func fetchModelsInputMatchesChannel(input FetchModelsInput, ch *ent.Channel) boo
 		strings.TrimRight(input.BaseURL, "/") == strings.TrimRight(ch.BaseURL, "/")
 }
 
+// firstStoredModelFetchAPIKey returns the credential a channel can authenticate
+// model discovery with: the legacy single key, the first configured key, or a
+// Vertex key. It returns an empty string for keyless channels.
+func firstStoredModelFetchAPIKey(ch *ent.Channel) string {
+	if ch == nil {
+		return ""
+	}
+
+	if ch.Credentials.APIKey != "" {
+		return ch.Credentials.APIKey
+	}
+
+	if len(ch.Credentials.APIKeys) > 0 {
+		return ch.Credentials.APIKeys[0]
+	}
+
+	if ch.Type == channel.TypeGeminiVertex && len(ch.Credentials.VertexAPIKeys) > 0 {
+		return ch.Credentials.VertexAPIKeys[0].APIKey
+	}
+
+	return ""
+}
+
+// channelHasStoredCredentials reports whether the channel carries any credential
+// at all. Such a credential must never be sent to a changed endpoint.
+func channelHasStoredCredentials(ch *ent.Channel) bool {
+	if ch == nil {
+		return false
+	}
+
+	return ch.Credentials.APIKey != "" ||
+		len(ch.Credentials.APIKeys) > 0 ||
+		ch.Credentials.OAuth != nil ||
+		len(ch.Credentials.OAuths) > 0 ||
+		len(ch.Credentials.VertexAPIKeys) > 0
+}
+
 func (f *ModelFetcher) FetchModels(ctx context.Context, input FetchModelsInput) (*FetchModelsResult, error) {
 	if input.ChannelType == channel.TypeAntigravity.String() {
 		models, err := f.fetchAntigravityModels(ctx, input)
@@ -428,22 +465,26 @@ func (f *ModelFetcher) FetchModels(ctx context.Context, input FetchModelsInput) 
 		}
 
 		if apiKey == "" {
-			if !fetchModelsInputMatchesChannel(input, ch) {
+			storedAPIKey := firstStoredModelFetchAPIKey(ch)
+			// A stored credential is bound to the endpoint it was configured
+			// for: never forward it to a changed channel type or base URL. The
+			// caller can still discover the new endpoint by supplying its key.
+			if !fetchModelsInputMatchesChannel(input, ch) && channelHasStoredCredentials(ch) {
 				return &FetchModelsResult{
 					Models: []ModelIdentify{},
-					Error:  lo.ToPtr("API key is required when channel type or base URL is changed"),
+					Error:  lo.ToPtr("cannot reuse the stored API key for a changed channel type or base URL"),
 				}, nil
 			}
 
-			apiKey = ch.Credentials.APIKey
-			if apiKey == "" && len(ch.Credentials.APIKeys) > 0 {
-				apiKey = ch.Credentials.APIKeys[0]
+			apiKey = storedAPIKey
+			// A keyless channel has no stored credential to protect, so its new
+			// endpoint is still fetched — unauthenticated — instead of failing.
+			if fetchModelsInputMatchesChannel(input, ch) || input.BaseURL == "" {
+				input.BaseURL = ch.BaseURL
 			}
-			if apiKey == "" && ch.Type == channel.TypeGeminiVertex && len(ch.Credentials.VertexAPIKeys) > 0 {
-				apiKey = ch.Credentials.VertexAPIKeys[0].APIKey
+			if input.ChannelType == "" {
+				input.ChannelType = ch.Type.String()
 			}
-			input.ChannelType = ch.Type.String()
-			input.BaseURL = ch.BaseURL
 		}
 
 		if ch.Type == channel.TypeGeminiVertex {
@@ -565,9 +606,13 @@ func (f *ModelFetcher) FetchModels(ctx context.Context, input FetchModelsInput) 
 				Error:  lo.ToPtr("failed to prepare Codex models request: Codex catalog URL must use HTTPS"),
 			}, nil
 		}
-		req, err = codex.ModelsRequest(ctx, oauth.NewAPIKeyTokenProvider(func(context.Context) string {
-			return apiKey
-		}), catalogBaseURL)
+		tokens := oauth.TokenGetter(oauth.NewStaticTokenProvider(&oauth.OAuthCredentials{}))
+		if apiKey != "" {
+			tokens = oauth.NewAPIKeyTokenProvider(func(context.Context) string {
+				return apiKey
+			})
+		}
+		req, err = codex.ModelsRequest(ctx, tokens, catalogBaseURL)
 		if err != nil {
 			return &FetchModelsResult{Models: []ModelIdentify{}, Error: lo.ToPtr(fmt.Sprintf("failed to prepare Codex models request: %v", err))}, nil
 		}
