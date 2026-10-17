@@ -156,6 +156,18 @@ func TestStreamDeliveryCancelRace(t *testing.T) {
 		downstream, cancel := context.WithCancel(context.Background())
 		owner, execution := newStreamLifecycle(downstream)
 		cancel()
+		select {
+		case <-execution.Done():
+		case <-time.After(time.Second):
+			t.Fatal("execution context was not canceled")
+		}
+		err := owner.Deliver(execution, func() (bool, error) {
+			t.Fatal("terminal write ran after downstream cancellation")
+			return true, nil
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Deliver error = %v, want context.Canceled", err)
+		}
 		owner.AcknowledgeDelivery()
 
 		if owner.DeliveryAcknowledged() {
@@ -169,10 +181,31 @@ func TestStreamDeliveryCancelRace(t *testing.T) {
 		owner.Close()
 	})
 
+	t.Run("successful terminal write remains acknowledged after cancellation", func(t *testing.T) {
+		downstream, cancel := context.WithCancel(context.Background())
+		owner, _ := newStreamLifecycle(downstream)
+		owner.stopOnce.Do(func() { close(owner.stopWatch) })
+		select {
+		case <-owner.done:
+		case <-time.After(time.Second):
+			t.Fatal("lifecycle watcher did not stop")
+		}
+		cancel()
+		owner.AcknowledgeDelivery()
+
+		if owner.DeliveryAcknowledged() {
+			t.Fatal("cancelled downstream was acknowledged without a delivery attempt")
+		}
+		owner.Close()
+	})
+
 	t.Run("acknowledgement before later cancellation remains latched", func(t *testing.T) {
 		downstream, cancel := context.WithCancel(context.Background())
 		owner, execution := newStreamLifecycle(downstream)
-		owner.AcknowledgeDelivery()
+		err := owner.Deliver(execution, func() (bool, error) { return true, nil })
+		if err != nil {
+			t.Fatalf("Deliver error = %v", err)
+		}
 		cancel()
 
 		if !owner.DeliveryAcknowledged() {
