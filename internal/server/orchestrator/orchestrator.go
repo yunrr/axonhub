@@ -73,11 +73,20 @@ func NewChatCompletionOrchestrator(
 		rateLimitStrategy,
 	).WithoutWeightTieBreaker().WithRoundRobinHealthFilter(roundRobinHealthFilter)
 
+	// The default selector owns the model library lookup; tests may construct the
+	// orchestrator without a selector, in which case model-card checks are skipped.
+	var modelService *biz.ModelService
+
+	if defaultSelector != nil {
+		modelService = defaultSelector.ModelService
+	}
+
 	return &ChatCompletionOrchestrator{
 		Inbound:            inbound,
 		RequestService:     requestService,
 		ChannelService:     channelService,
 		SystemService:      systemService,
+		ModelService:       modelService,
 		UsageLogService:    usageLogService,
 		QuotaService:       quotaService,
 		LiveStreamRegistry: liveStreamRegistry,
@@ -109,6 +118,7 @@ type ChatCompletionOrchestrator struct {
 	RequestService     *biz.RequestService
 	ChannelService     *biz.ChannelService
 	SystemService      *biz.SystemService
+	ModelService       *biz.ModelService
 	UsageLogService    *biz.UsageLogService
 	QuotaService       *biz.QuotaService
 	LiveStreamRegistry *biz.LiveStreamRegistry
@@ -287,7 +297,7 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 	// Add inbound middlewares (executed after inbound.TransformRequest)
 	middlewares = append(middlewares,
 		enforceQuota(inbound, processor.QuotaService),
-		applyAutoReasoningEffort(processor.SystemService),
+		applyAutoReasoningEffort(processor.SystemService, processor.ModelService),
 		checkApiKeyModelAccess(inbound),
 		applyModelMapping(inbound),
 		selectCandidates(inbound, processor.quotaProvider, processor.SystemService),

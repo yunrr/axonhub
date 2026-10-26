@@ -458,6 +458,9 @@ type SystemModelSettings struct {
 	// like "gpt-5.4-xhigh" are normalized to the base model and reasoning_effort.
 	// When true, the suffix is stripped from model and applied to request.reasoning_effort,
 	// overriding any reasoning_effort already set in the request.
+	// The levels declared by the model card (reasoningEfforts) are authoritative; a level
+	// the card does not declare is rejected. Models without declared levels, and models
+	// missing from the library, accept the unified effort vocabulary.
 	AutoReasoningEffort bool `json:"auto_reasoning_effort"`
 
 	// ModelBlacklistRegex is a regex pattern. When QueryAllChannelModels is true,

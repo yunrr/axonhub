@@ -16,7 +16,9 @@ import (
 	"github.com/looplj/axonhub/internal/ent"
 	"github.com/looplj/axonhub/internal/ent/channel"
 	"github.com/looplj/axonhub/internal/ent/model"
+	"github.com/looplj/axonhub/internal/log"
 	"github.com/looplj/axonhub/internal/objects"
+	"github.com/looplj/axonhub/internal/pkg/xcache"
 	"github.com/looplj/axonhub/internal/pkg/xerrors"
 	"github.com/looplj/axonhub/internal/pkg/xregexp"
 	"github.com/looplj/axonhub/internal/pkg/xtime"
@@ -27,6 +29,7 @@ import (
 type ModelServiceParams struct {
 	fx.In
 
+	CacheConfig    xcache.Config
 	ChannelService *ChannelService
 	SystemService  *SystemService
 	Ent            *ent.Client
@@ -37,8 +40,9 @@ func NewModelService(params ModelServiceParams) *ModelService {
 		AbstractService: &AbstractService{
 			db: params.Ent,
 		},
-		channelService: params.ChannelService,
-		systemService:  params.SystemService,
+		channelService:        params.ChannelService,
+		systemService:         params.SystemService,
+		reasoningEffortsCache: xcache.NewFromConfig[xcache.Entry[[]string]](params.CacheConfig),
 	}
 }
 
@@ -47,6 +51,9 @@ type ModelService struct {
 
 	channelService *ChannelService
 	systemService  *SystemService
+	// reasoningEffortsCache caches the reasoning effort levels declared by each model
+	// card. Keys are model ids; negative entries mark models missing from the library.
+	reasoningEffortsCache xcache.Cache[xcache.Entry[[]string]]
 }
 
 // validateModelSettings validates regex patterns in model settings.
@@ -385,6 +392,8 @@ func (svc *ModelService) CreateModel(ctx context.Context, input ent.CreateModelI
 		return nil, fmt.Errorf("failed to create model: %w", err)
 	}
 
+	svc.invalidateModelReasoningEfforts(ctx, model.ModelID)
+
 	return model, nil
 }
 
@@ -452,6 +461,8 @@ func (svc *ModelService) BulkCreateModels(ctx context.Context, inputs []*ent.Cre
 		return nil, fmt.Errorf("failed to bulk create models: %w", err)
 	}
 
+	svc.invalidateModelReasoningEfforts(ctx, lo.Map(models, func(m *ent.Model, _ int) string { return m.ModelID })...)
+
 	return models, nil
 }
 
@@ -461,6 +472,15 @@ func (svc *ModelService) UpdateModel(ctx context.Context, id int, input *ent.Upd
 	if input.Settings != nil {
 		if err := svc.validateModelSettings(input.Settings); err != nil {
 			return nil, err
+		}
+	}
+
+	// A rename leaves a stale entry under the previous model id.
+	var previousModelID string
+
+	if input.ModelID != nil {
+		if ids := svc.queryModelIDs(ctx, id); len(ids) == 1 {
+			previousModelID = ids[0]
 		}
 	}
 
@@ -494,6 +514,8 @@ func (svc *ModelService) UpdateModel(ctx context.Context, id int, input *ent.Upd
 		return nil, fmt.Errorf("failed to update model: %w", err)
 	}
 
+	svc.invalidateModelReasoningEfforts(ctx, previousModelID, model.ModelID)
+
 	return model, nil
 }
 
@@ -506,20 +528,28 @@ func (svc *ModelService) UpdateModelStatus(ctx context.Context, id int, status m
 		return nil, fmt.Errorf("failed to update model status: %w", err)
 	}
 
+	svc.invalidateModelReasoningEfforts(ctx, model.ModelID)
+
 	return model, nil
 }
 
 // DeleteModel deletes a model by ID.
 func (svc *ModelService) DeleteModel(ctx context.Context, id int) error {
+	modelIDs := svc.queryModelIDs(ctx, id)
+
 	if err := svc.entFromContext(ctx).Model.DeleteOneID(id).Exec(ctx); err != nil {
 		return fmt.Errorf("failed to delete model: %w", err)
 	}
+
+	svc.invalidateModelReasoningEfforts(ctx, modelIDs...)
 
 	return nil
 }
 
 // BulkArchiveModels archives multiple models by their IDs.
 func (svc *ModelService) BulkArchiveModels(ctx context.Context, ids []int) error {
+	svc.invalidateModelReasoningEffortsByIDs(ctx, ids...)
+
 	_, err := svc.entFromContext(ctx).Model.Update().
 		Where(model.IDIn(ids...)).
 		SetStatus(model.StatusArchived).
@@ -533,6 +563,8 @@ func (svc *ModelService) BulkArchiveModels(ctx context.Context, ids []int) error
 
 // BulkDisableModels disables multiple models by their IDs.
 func (svc *ModelService) BulkDisableModels(ctx context.Context, ids []int) error {
+	svc.invalidateModelReasoningEffortsByIDs(ctx, ids...)
+
 	_, err := svc.entFromContext(ctx).Model.Update().
 		Where(model.IDIn(ids...)).
 		SetStatus(model.StatusDisabled).
@@ -546,6 +578,8 @@ func (svc *ModelService) BulkDisableModels(ctx context.Context, ids []int) error
 
 // BulkEnableModels enables multiple models by their IDs.
 func (svc *ModelService) BulkEnableModels(ctx context.Context, ids []int) error {
+	svc.invalidateModelReasoningEffortsByIDs(ctx, ids...)
+
 	_, err := svc.entFromContext(ctx).Model.Update().
 		Where(model.IDIn(ids...)).
 		SetStatus(model.StatusEnabled).
@@ -559,6 +593,8 @@ func (svc *ModelService) BulkEnableModels(ctx context.Context, ids []int) error 
 
 // BulkDeleteModels deletes multiple models by their IDs.
 func (svc *ModelService) BulkDeleteModels(ctx context.Context, ids []int) error {
+	svc.invalidateModelReasoningEffortsByIDs(ctx, ids...)
+
 	_, err := svc.entFromContext(ctx).Model.Delete().
 		Where(model.IDIn(ids...)).
 		Exec(ctx)
@@ -603,6 +639,157 @@ func (svc *ModelService) GetModelByModelID(ctx context.Context, modelID string, 
 			model.StatusEQ(status),
 		).
 		First(ctx)
+}
+
+const modelReasoningEffortsCacheKeyPrefix = "model:reasoning-efforts:"
+
+func modelReasoningEffortsCacheKey(modelID string) string {
+	return modelReasoningEffortsCacheKeyPrefix + modelID
+}
+
+// cachedModelReasoningEfforts reads the cache entry of a model id. The second result is
+// false when the cache is unavailable (eg. a service literal without a cache).
+func (svc *ModelService) cachedModelReasoningEfforts(ctx context.Context, modelID string) (xcache.Entry[[]string], bool) {
+	if svc.reasoningEffortsCache == nil {
+		return xcache.Entry[[]string]{}, false
+	}
+
+	entry, err := svc.reasoningEffortsCache.Get(ctx, modelReasoningEffortsCacheKey(modelID))
+	if err != nil {
+		return xcache.Entry[[]string]{}, false
+	}
+
+	return entry, true
+}
+
+func (svc *ModelService) setCachedModelReasoningEfforts(ctx context.Context, modelID string, entry xcache.Entry[[]string]) {
+	if svc.reasoningEffortsCache == nil {
+		return
+	}
+
+	if err := svc.reasoningEffortsCache.Set(ctx, modelReasoningEffortsCacheKey(modelID), entry); err != nil {
+		log.Warn(ctx, "failed to cache model reasoning efforts", log.String("model_id", modelID), log.Cause(err))
+	}
+}
+
+// GetModelReasoningEfforts returns the reasoning effort levels declared by the model card
+// of each requested model id. Only enabled models are resolved.
+//
+// A present key with a nil value means the model exists but does not declare any levels
+// (unknown); an absent key means the model is not in the library or is not enabled.
+// Results are cached, so a hot model costs no database query; all cache misses of one
+// call are resolved with a single query.
+func (svc *ModelService) GetModelReasoningEfforts(ctx context.Context, modelIDs ...string) (map[string][]string, error) {
+	result := make(map[string][]string, len(modelIDs))
+	missing := make([]string, 0, len(modelIDs))
+	requested := make(map[string]struct{}, len(modelIDs))
+
+	for _, modelID := range modelIDs {
+		if modelID == "" {
+			continue
+		}
+
+		if _, ok := requested[modelID]; ok {
+			continue
+		}
+
+		requested[modelID] = struct{}{}
+
+		entry, ok := svc.cachedModelReasoningEfforts(ctx, modelID)
+		if !ok || entry.IsExpired() {
+			missing = append(missing, modelID)
+
+			continue
+		}
+
+		// Negative entry: the model is known to be missing from the library.
+		if entry.IsEmpty {
+			continue
+		}
+
+		result[modelID] = entry.Value
+	}
+
+	if len(missing) == 0 {
+		return result, nil
+	}
+
+	models, err := svc.entFromContext(ctx).Model.Query().
+		Where(
+			model.ModelIDIn(missing...),
+			model.StatusEQ(model.StatusEnabled),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query model reasoning efforts: %w", err)
+	}
+
+	found := make(map[string]struct{}, len(models))
+
+	for _, m := range models {
+		found[m.ModelID] = struct{}{}
+
+		var efforts []string
+		if m.ModelCard != nil {
+			efforts = m.ModelCard.ReasoningEfforts
+		}
+
+		result[m.ModelID] = efforts
+
+		svc.setCachedModelReasoningEfforts(ctx, m.ModelID, *xcache.NewEntry(efforts, 0))
+	}
+
+	for _, modelID := range missing {
+		if _, ok := found[modelID]; ok {
+			continue
+		}
+
+		svc.setCachedModelReasoningEfforts(ctx, modelID, *xcache.NewEmptyEntry[[]string](negativeCacheTTL))
+	}
+
+	return result, nil
+}
+
+// invalidateModelReasoningEfforts drops cached reasoning effort levels for the given model ids.
+func (svc *ModelService) invalidateModelReasoningEfforts(ctx context.Context, modelIDs ...string) {
+	if svc.reasoningEffortsCache == nil {
+		return
+	}
+
+	for _, modelID := range modelIDs {
+		if modelID == "" {
+			continue
+		}
+
+		if err := svc.reasoningEffortsCache.Delete(ctx, modelReasoningEffortsCacheKey(modelID)); err != nil {
+			log.Warn(ctx, "failed to invalidate model reasoning efforts cache",
+				log.String("model_id", modelID), log.Cause(err))
+		}
+	}
+}
+
+// queryModelIDs resolves model ids by primary keys, returning nil when the lookup fails.
+func (svc *ModelService) queryModelIDs(ctx context.Context, ids ...int) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	models, err := svc.entFromContext(ctx).Model.Query().
+		Where(model.IDIn(ids...)).
+		Select(model.FieldModelID).
+		All(ctx)
+	if err != nil {
+		log.Warn(ctx, "failed to query model ids for cache invalidation", log.Cause(err))
+
+		return nil
+	}
+
+	return lo.Map(models, func(m *ent.Model, _ int) string { return m.ModelID })
+}
+
+// invalidateModelReasoningEffortsByIDs drops cached levels for models addressed by primary key.
+func (svc *ModelService) invalidateModelReasoningEffortsByIDs(ctx context.Context, ids ...int) {
+	svc.invalidateModelReasoningEfforts(ctx, svc.queryModelIDs(ctx, ids...)...)
 }
 
 // ListModels retrieves all models that have explicit Model entity configuration.
