@@ -107,7 +107,7 @@ bun.lock
 
 # Task files
 # tasks.json
-# tasks/ 
+# tasks/
 
 .kiro
 openspec
@@ -134,6 +134,8 @@ config.yml
 internal/server/static/dist/*
 !internal/server/static/dist/.gitkeep
 *.b64
+*.axplugin
+__pycache__/
 coverage.out
 *.test
 *.backup

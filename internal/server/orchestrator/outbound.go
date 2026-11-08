@@ -11,6 +11,7 @@ import (
 
 	"github.com/samber/lo"
 
+	"github.com/looplj/axonhub/internal/contexts"
 	"github.com/looplj/axonhub/internal/ent"
 	"github.com/looplj/axonhub/internal/ent/requestexecution"
 	"github.com/looplj/axonhub/internal/log"
@@ -131,7 +132,7 @@ func (ts *OutboundPersistentStream) consumeTailEvent(event *httpclient.StreamEve
 	if ts.terminalState == streamTerminalNone && ts.terminalTracker.Observe(event) {
 		ts.terminalState = classifyAcceptedTerminalEvent(event)
 		ts.state.OutboundStreamTerminal = ts.terminalState
-		ts.outcome.observeTerminal(ts.terminalState)
+		ts.outcome.observeTerminalEvent(ts.terminalState, event)
 	}
 	return nil
 }
@@ -198,7 +199,7 @@ func (ts *OutboundPersistentStream) Current() *httpclient.StreamEvent {
 				if ts.terminalState != streamTerminalCompleted {
 					ts.terminalError = streamTerminalErrorMessage(event, ts.terminalState)
 				}
-				ts.outcome.observeTerminal(ts.terminalState)
+				ts.outcome.observeTerminalEvent(ts.terminalState, event)
 				ts.markPerformanceTerminal(ts.terminalState, ts.terminalError)
 				if isNonChoiceTerminalEvent(event) {
 					ts.sourceEnd = llm.SourceEndSemantic
@@ -682,8 +683,8 @@ func (p *PersistentOutboundTransformer) refreshCandidateAPIFormat(
 	}
 
 	entry := candidate.Models[modelIndex]
-	endpoints := applyForcedAPIFormats(ctx, candidate.Channel, []biz.ChannelModelEntry{entry}, requestModel, candidate.Channel.ResolveEndpoints())
-	candidate.APIFormat = SelectAPIFormat(endpoints, req)
+	endpoints, forced := applyForcedAPIFormats(ctx, candidate.Channel, []biz.ChannelModelEntry{entry}, requestModel, candidate.Channel.ResolveEndpoints())
+	candidate.APIFormat = selectEndpointAPIFormat(endpoints, req, forced)
 }
 
 // APIFormat returns the API format of the transformer.
@@ -724,6 +725,7 @@ func (p *PersistentOutboundTransformer) TransformRequest(ctx context.Context, ll
 	entry := candidate.Models[p.state.CurrentModelIndex]
 
 	p.state.CurrentCandidate = candidate
+	p.state.OutboundAttempt++
 	p.state.StreamCompleted = false
 	p.state.OutboundStreamTerminal = streamTerminalNone
 	p.state.CleanEOFCompletionEvidence = false
@@ -750,6 +752,14 @@ func (p *PersistentOutboundTransformer) TransformRequest(ctx context.Context, ll
 		outboundFormat = llm.APIFormat(candidate.APIFormat)
 	}
 
+	if candidate.Channel != nil {
+		ctx = contexts.WithAttemptChannel(ctx, contexts.AttemptChannel{
+			ID:   candidate.Channel.ID,
+			Name: candidate.Channel.Name,
+			Type: string(candidate.Channel.Type),
+		})
+	}
+
 	// Apply channel transform options to create a new request
 	llmRequest = applyTransformOptions(llmRequest, candidate.Channel.Settings)
 	llmRequest = applyReasoningEffortMapping(llmRequest, candidate.Channel.Settings)
@@ -757,6 +767,9 @@ func (p *PersistentOutboundTransformer) TransformRequest(ctx context.Context, ll
 	for _, middleware := range p.outboundLlmRequestMiddlewares {
 		transformedRequest, err := middleware.OnOutboundLlmRequest(ctx, llmRequest, outboundFormat)
 		if err != nil {
+			if isPluginOverloaded(err) {
+				p.state.PluginOverloaded = true
+			}
 			return nil, fmt.Errorf("failed to apply %s middleware: %w", middleware.Name(), err)
 		}
 		llmRequest = transformedRequest
@@ -788,8 +801,12 @@ func (p *PersistentOutboundTransformer) TransformRequest(ctx context.Context, ll
 		return nil, err
 	}
 
+	// Resolve the emitted protocol once for raw middleware, plugin matching,
+	// pass-through, and persistence. Transformers may omit the request field.
 	if httpRequest.APIFormat != "" {
 		outboundFormat = llm.APIFormat(httpRequest.APIFormat)
+	} else {
+		httpRequest.APIFormat = string(outboundFormat)
 	}
 	if hasAdditionalTools && !isResponsesFormat(outboundFormat) && outboundFormat != llm.APIFormatOpenAIResponseCompact {
 		return nil, fmt.Errorf(
@@ -967,6 +984,9 @@ func (p *PersistentOutboundTransformer) GetRequestedModel() string {
 // HasMoreChannels returns true if there are more candidates available for retry.
 // It implements the pipeline.Retryable interface.
 func (p *PersistentOutboundTransformer) HasMoreChannels() bool {
+	if p.state.PluginOverloaded {
+		return false
+	}
 	return p.state.CurrentCandidateIndex+1 < len(p.state.ChannelModelsCandidates)
 }
 
@@ -991,6 +1011,10 @@ func (p *PersistentOutboundTransformer) NextChannel(ctx context.Context) error {
 	if lifecycleOwner := streamLifecycleFromContext(ctx); lifecycleOwner != nil {
 		lifecycleOwner.waitForAccounting()
 	}
+
+	// Remember the channel being left before the index moves. The event is
+	// published only after the switch succeeds.
+	leftChannel, leftModel, attempt := p.channelBeingLeft()
 
 	// Cancel any in-flight pass-through stream goroutine from the previous attempt
 	// so it exits promptly and releases its upstream HTTP connection.
@@ -1026,6 +1050,8 @@ func (p *PersistentOutboundTransformer) NextChannel(ctx context.Context) error {
 		)
 	}
 
+	p.publishRequestFailover(ctx, leftChannel, leftModel, attempt, candidate.Channel)
+
 	return nil
 }
 
@@ -1041,9 +1067,10 @@ func (p *PersistentOutboundTransformer) CanRetry(err error) bool {
 		return false
 	}
 
-	// Local admission rejection: the same channel cannot make progress until the
-	// local queue/RPM state changes, so bounce immediately to the next channel.
-	if isChannelQueueError(err) || isLocalRPMExhaustedError(err) {
+	// Retrying the same channel cannot resolve local capacity rejection.
+	// Plugin overload also disables failover through state.PluginOverloaded;
+	// queue/RPM rejections can still move to the next channel.
+	if isLocalAdmissionError(err) {
 		return false
 	}
 
@@ -1073,6 +1100,31 @@ func (p *PersistentOutboundTransformer) CanRetry(err error) bool {
 	if (httpclient.IsRateLimitErr(err) || ExtractStatusCodeFromError(err) == http.StatusTooManyRequests) &&
 		!channelRetriesOn429(p.state.CurrentCandidate.Channel) {
 		log.Debug(context.Background(), "429 rate limit, skipping same-channel retry to switch to next channel",
+			log.Int("channel_id", p.state.CurrentCandidate.Channel.ID),
+		)
+
+		return false
+	}
+
+	// 520 Unknown Error (typically a Cloudflare edge failure with an empty
+	// body): the whole backend edge is unresponsive, so iterating model aliases
+	// on the same channel just burns attempts without any chance of success.
+	// Force a channel switch instead of grinding through the candidate's model
+	// list on a dead backend.
+	if ExtractStatusCodeFromError(err) == 520 {
+		log.Debug(context.Background(), "520 edge error, skipping same-channel retry to switch to next channel",
+			log.Int("channel_id", p.state.CurrentCandidate.Channel.ID),
+		)
+
+		return false
+	}
+
+	// 402 Payment Required (e.g. Cline credit balance exhausted): the account
+	// behind this channel cannot serve any model, so iterating model aliases
+	// on the same channel just burns attempts. Force a channel switch so a
+	// backup channel with a funded account is tried immediately.
+	if ExtractStatusCodeFromError(err) == http.StatusPaymentRequired {
+		log.Debug(context.Background(), "402 payment required, skipping same-channel retry to switch to next channel",
 			log.Int("channel_id", p.state.CurrentCandidate.Channel.ID),
 		)
 

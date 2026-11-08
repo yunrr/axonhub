@@ -29,6 +29,19 @@ function CommandMenuContent({
   const sidebarData = useSidebarData();
   const { t } = useTranslation();
 
+  // Search every module, not only the one shown in the sidebar.
+  const navGroups = React.useMemo(
+    () =>
+      sidebarData.modules.flatMap((module) =>
+        module.groups.map((group) => ({
+          ...group,
+          key: `${module.id}-${group.id ?? group.title}`,
+          title: [sidebarData.modules.length > 1 ? module.title : '', group.title].filter(Boolean).join(' · '),
+        }))
+      ),
+    [sidebarData.modules]
+  );
+
   const runCommand = React.useCallback(
     (command: () => unknown) => {
       setOpen(false);
@@ -43,16 +56,22 @@ function CommandMenuContent({
       <CommandList>
         <ScrollArea type='hover' className='h-72 pr-1'>
           <CommandEmpty>{t('command.noResults')}</CommandEmpty>
-          {sidebarData.navGroups.map((group) => (
-            <CommandGroup key={group.title} heading={group.title}>
+          {navGroups.map((group) => (
+            <CommandGroup key={group.key} heading={group.title}>
               {group.items.map((navItem, i) => {
                 if (navItem.url)
                   return (
                     <CommandItem
-                      key={`${navItem.url}-${i}`}
-                      value={navItem.title}
+                      key={`${navItem.matchPath || navItem.url}-${i}`}
+                      value={`${navItem.title} ${navItem.matchPath || navItem.url}`}
                       onSelect={() => {
-                        runCommand(() => navigate({ to: navItem.url }));
+                        runCommand(() => {
+                          if (navItem.params) {
+                            void navigate({ to: navItem.url, params: navItem.params } as never);
+                            return;
+                          }
+                          void navigate({ to: navItem.url });
+                        });
                       }}
                     >
                       <div className='mr-2 flex h-4 w-4 items-center justify-center'>
