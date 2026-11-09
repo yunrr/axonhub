@@ -56,22 +56,24 @@ func NewChatCompletionOrchestrator(
 
 	rateLimitStrategy := NewRateLimitAwareStrategy(rateLimitTracker, channelLimiterManager)
 
-	adaptiveLoadBalancer := NewLoadBalancer(systemService, channelService,
-		NewErrorAwareStrategy(channelService),
-		NewWeightRoundRobinStrategy(channelService),
-		NewLatencyAwareStrategy(channelService),
+	adaptiveLoadBalancer := NewLoadBalancer(channelService, channelService,
+		NewErrorAwareStrategy(),
+		NewWeightRoundRobinStrategy(),
+		NewLatencyAwareStrategy(),
 		rateLimitStrategy,
 	)
 
-	failoverLoadBalancer := NewLoadBalancer(systemService, channelService,
+	// Failover and circuit-breaker strategies never read channel metrics, so
+	// these load balancers skip the per-candidate metrics fetch.
+	failoverLoadBalancer := NewLoadBalancer(nil, channelService,
 		NewWeightStrategy(), NewRandomStrategy(), rateLimitStrategy)
 
-	circuitBreakerLoadBalancer := NewLoadBalancer(systemService, channelService,
+	circuitBreakerLoadBalancer := NewLoadBalancer(nil, channelService,
 		NewWeightStrategy(), NewModelAwareCircuitBreakerStrategy(modelCircuitBreaker), rateLimitStrategy)
 
-	roundRobinHealthFilter := NewRoundRobinHealthStrategy(channelService)
-	roundRobinLoadBalancer := NewLoadBalancer(systemService, channelService,
-		NewRoundRobinStrategy(channelService),
+	roundRobinHealthFilter := NewRoundRobinHealthStrategy()
+	roundRobinLoadBalancer := NewLoadBalancer(channelService, channelService,
+		NewRoundRobinStrategy(),
 		rateLimitStrategy,
 	).WithoutWeightTieBreaker().WithRoundRobinHealthFilter(roundRobinHealthFilter)
 
@@ -217,7 +219,6 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 	lifecycleOwner, executionCtx := newStreamLifecycle(ctx)
 	ctx = executionCtx
 
-	var preparedResponsesBody []byte
 	var continuation *responsesContinuation
 	if shared.IsResponsesAPI(ctx) && request != nil && processor.responsesSessions != nil {
 		continuation = newResponsesContinuation(processor.responsesSessions, request.Body)
@@ -250,8 +251,9 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 
 	apiKey, _ := contexts.GetAPIKey(ctx)
 
-	// Get retry policy from system settings
-	retryPolicy := processor.SystemService.RetryPolicyOrDefault(ctx)
+	settings := processor.loadRequestSettings(ctx)
+	ctx = withRequestSettings(ctx, settings)
+	retryPolicy := &settings.RetryPolicy
 
 	if log.DebugEnabled(ctx) {
 		log.Debug(ctx, "chat request received",
@@ -264,11 +266,9 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 		APIKey:                apiKey,
 		RequestService:        processor.RequestService,
 		UsageLogService:       processor.UsageLogService,
-		SystemService:         processor.SystemService,
 		ChannelService:        processor.ChannelService,
 		PromptProvider:        processor.PromptProvider,
 		PromptProtecter:       processor.PromptProtecter,
-		RetryPolicyProvider:   processor.SystemService,
 		CandidateSelector:     processor.channelSelector,
 		LoadBalancers: map[string]*LoadBalancer{
 			biz.LoadBalancerStrategyAdaptive:       processor.adaptiveLoadBalancer,
@@ -277,6 +277,7 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 			biz.LoadBalancerStrategyRoundRobin:     processor.roundRobinLoadBalancer,
 		},
 		RoutingPolicy:         deriveRoutingPolicy(retryPolicy, apiKey, nil),
+		Settings:              settings,
 		ModelMapper:           processor.ModelMapper,
 		Proxy:                 processor.proxy,
 		CurrentCandidateIndex: 0,
@@ -324,25 +325,25 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 	// Add inbound middlewares (executed after inbound.TransformRequest)
 	middlewares = append(middlewares,
 		enforceQuota(inbound, processor.QuotaService),
-		applyAutoReasoningEffort(processor.SystemService, processor.ModelService),
+		applyAutoReasoningEffort(settings, processor.ModelService),
 		checkApiKeyModelAccess(inbound),
 		applyModelMapping(inbound),
-		selectCandidates(inbound, processor.quotaProvider, processor.SystemService),
+		selectCandidates(inbound, processor.quotaProvider),
 		injectPrompts(inbound),
 		protectPrompts(inbound),
 		// Response pass-through middlewares run before persistRequest so the raw provider
 		// response is saved when pass-through is enabled.
-		applyPassThroughResponse(outbound, processor.SystemService),
-		applyPassThroughStream(outbound, processor.SystemService),
+		applyPassThroughResponse(outbound),
+		applyPassThroughStream(outbound),
 		persistRequest(inbound),
 	)
 
 	// Add outbound middlewares (executed after outbound.TransformRequest)
 	middlewares = append(middlewares,
 		// applyPassThroughBody runs first so that override operations can still modify the pass-through body.
-		applyPassThroughRequestBody(outbound, processor.SystemService, processor.Plugins.Hooks),
+		applyPassThroughRequestBody(outbound, processor.Plugins.Hooks),
 		// Responses HTTP/WS adaptation reuses the effective body before continuation and overrides.
-		applyResponsesTransportRequestBody(outbound, processor.SystemService),
+		applyResponsesTransportRequestBody(outbound),
 		// Codex Responses metadata must travel with a pass-through body so compatible
 		// upstreams preserve the client's protocol behavior.
 		applyPassThroughRequestHeaders(outbound),
@@ -357,7 +358,7 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 		// (e.g. GitHubCopilotChat on Copilot channels) is preserved when
 		// pass-through is disabled. Override headers can still modify the
 		// User-Agent if configured.
-		applyUserAgentPassThrough(outbound, processor.SystemService),
+		applyUserAgentPassThrough(outbound),
 		applyOverrideRequestHeaders(outbound),
 		// Remove transport-incompatible fields after pass-through and overrides,
 		// so persistence and execution observe the same provider request.
@@ -374,7 +375,7 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 		persistRequestExecution(outbound),
 
 		// Forward the events to the live streaming.
-		withLivePreview(state, processor.SystemService, processor.LiveStreamRegistry),
+		withLivePreview(state, processor.LiveStreamRegistry),
 
 		// Per-channel concurrency admission runs before RPM admission so a locally
 		// rejected queue attempt does not consume RPM for a request that never
@@ -387,10 +388,10 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 
 		// Response pass-through capture middlewares must be last in the outbound list
 		// so they run first in reverse order (before any other OnOutboundRawResponse/OnOutboundRawStream handlers).
-		captureRawProviderResponse(outbound, processor.SystemService),
-		captureRawProviderStream(outbound, processor.SystemService),
+		captureRawProviderResponse(outbound),
+		captureRawProviderStream(outbound),
 		captureResponsesProvider(outbound),
-		// Run first on raw responses (reverse order), before capture fan-out.
+		// Run first on raw responses (reverse order), before pass-through capture.
 		closeCompletedAnthropicStream(outbound),
 	)
 
@@ -414,10 +415,11 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 			if updateErr := persistRequestExecutionFailure(
 				persistCtx,
 				processor.RequestService,
-				requestExec.ID,
+				requestExec,
 				err,
 				nil,
 				"",
+				state.executionResponseHeaders(requestExec.ID),
 			); updateErr != nil {
 				log.Warn(persistCtx, "Failed to update request execution status from error", log.Cause(updateErr))
 			}
@@ -430,7 +432,7 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 		if request := outbound.GetRequest(); request != nil {
 			if updateErr := processor.RequestService.UpdateRequestStatusFromError(
 				persistCtx,
-				request.ID,
+				request,
 				err,
 			); updateErr != nil {
 				log.Warn(persistCtx, "Failed to update request status from error", log.Cause(updateErr))
@@ -475,11 +477,6 @@ func (processor *ChatCompletionOrchestrator) Process(ctx context.Context, reques
 		continuation.accept(ctx)
 	}
 	lifecycleOwner.Close()
-	if continuation == nil || result.Response == nil {
-		if preparedResponsesBody != nil && result.Response != nil {
-			processor.responsesSessions.record(ctx, preparedResponsesBody, result.Response.Body)
-		}
-	}
 
 	return ChatCompletionResult{
 		Route:                         route,

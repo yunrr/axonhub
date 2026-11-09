@@ -26,18 +26,18 @@ var supportedAutoReasoningEfforts = map[string]struct{}{
 	llm.ReasoningEffortMax:     {},
 }
 
-func applyAutoReasoningEffort(systemService *biz.SystemService, modelService *biz.ModelService) pipeline.Middleware {
+func applyAutoReasoningEffort(settings *RequestSettings, modelService *biz.ModelService) pipeline.Middleware {
 	return &autoReasoningEffortMiddleware{
-		systemService: systemService,
-		modelService:  modelService,
+		settings:     settings,
+		modelService: modelService,
 	}
 }
 
 type autoReasoningEffortMiddleware struct {
 	pipeline.DummyMiddleware
 
-	systemService *biz.SystemService
-	modelService  *biz.ModelService
+	settings     *RequestSettings
+	modelService *biz.ModelService
 }
 
 func (m *autoReasoningEffortMiddleware) Name() string {
@@ -49,8 +49,7 @@ func (m *autoReasoningEffortMiddleware) OnInboundLlmRequest(ctx context.Context,
 		return llmRequest, nil
 	}
 
-	settings := m.systemService.ModelSettingsOrDefault(ctx)
-	if !settings.AutoReasoningEffort {
+	if !m.settings.ModelSettings.AutoReasoningEffort {
 		return llmRequest, nil
 	}
 

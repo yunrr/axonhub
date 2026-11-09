@@ -243,9 +243,6 @@ func TestAutoReasoningEffortMiddleware_OnInboundLlmRequest(t *testing.T) {
 			ctx = ent.NewContext(ctx, client)
 			_, _, systemService, _ := setupTestServices(t, client)
 
-			err := systemService.SetModelSettings(ctx, tt.settings)
-			require.NoError(t, err)
-
 			for _, m := range tt.models {
 				client.Model.Create().
 					SetModelID(m.modelID).
@@ -268,7 +265,7 @@ func TestAutoReasoningEffortMiddleware_OnInboundLlmRequest(t *testing.T) {
 				})
 			}
 
-			middleware := applyAutoReasoningEffort(systemService, modelService)
+			middleware := applyAutoReasoningEffort(&RequestSettings{ModelSettings: tt.settings}, modelService)
 			result, err := middleware.OnInboundLlmRequest(ctx, tt.request)
 
 			if tt.wantErr != "" {
@@ -297,8 +294,6 @@ func TestAutoReasoningEffortMiddleware_CachesModelCard(t *testing.T) {
 	ctx = ent.NewContext(ctx, client)
 	_, _, systemService, _ := setupTestServices(t, client)
 
-	require.NoError(t, systemService.SetModelSettings(ctx, biz.SystemModelSettings{AutoReasoningEffort: true}))
-
 	modelRow := client.Model.Create().
 		SetModelID("gpt-5.4").
 		SetName("GPT-5.4").
@@ -316,7 +311,9 @@ func TestAutoReasoningEffortMiddleware_CachesModelCard(t *testing.T) {
 		SystemService: systemService,
 	})
 
-	middleware := applyAutoReasoningEffort(systemService, modelService)
+	middleware := applyAutoReasoningEffort(&RequestSettings{
+		ModelSettings: biz.SystemModelSettings{AutoReasoningEffort: true},
+	}, modelService)
 
 	// Warm the cache: "minimal" is rejected by the declared levels.
 	_, err := middleware.OnInboundLlmRequest(ctx, &llm.Request{Model: "gpt-5.4-minimal"})
