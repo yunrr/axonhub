@@ -25,9 +25,16 @@ var Module = fx.Module("biz",
 	fx.Provide(NewRoleService),
 	fx.Provide(NewThreadService),
 	fx.Provide(NewTraceService),
+	fx.Invoke(func(lc fx.Lifecycle, svc *TraceService) {
+		lc.Append(fx.Hook{OnStop: func(context.Context) error { svc.identities.stop(); return nil }})
+	}),
 	fx.Provide(NewDataStorageService),
 	fx.Provide(NewChannelOverrideTemplateService),
 	fx.Provide(NewModelService),
+	fx.Provide(NewModelCacheService),
+	fx.Invoke(func(lc fx.Lifecycle, svc *ModelCacheService) {
+		lc.Append(fx.Hook{OnStop: func(context.Context) error { svc.Stop(); return nil }})
+	}),
 	fx.Provide(NewChannelProbeService),
 	fx.Provide(NewPromptService),
 	fx.Provide(NewPromptProtectionRuleService),
@@ -38,6 +45,7 @@ var Module = fx.Module("biz",
 	fx.Provide(NewCatalogService),
 	fx.Invoke(func(channelSvc *ChannelService, quotaSvc *ProviderQuotaService) {
 		channelSvc.SetChannelProviderQuotaInvalidator(quotaSvc)
+		quotaSvc.SetQuotaKeyReconciler(channelSvc)
 	}),
 	fx.Invoke(func(lc fx.Lifecycle, svc *APIKeyService) {
 		lc.Append(fx.Hook{

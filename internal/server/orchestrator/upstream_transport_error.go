@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"syscall"
 
 	"github.com/looplj/axonhub/internal/ent"
@@ -32,16 +33,20 @@ func IsUpstreamTransportError(err error) bool {
 		return false
 	}
 
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-
 	// Already carries a status code or structured detail: nothing to classify.
 	if _, ok := errors.AsType[*httpclient.Error](err); ok {
 		return false
 	}
 
 	if _, ok := errors.AsType[*llm.ResponseError](err); ok {
+		return false
+	}
+
+	if errors.Is(err, httpclient.ErrStreamIdleTimeout) {
+		return true
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 
@@ -54,9 +59,27 @@ func IsUpstreamTransportError(err error) bool {
 		return true
 	}
 
+	if isHTTP2ConnectionError(err) {
+		return true
+	}
+
 	var netErr net.Error
 
 	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+}
+
+// isHTTP2ConnectionError reports whether err is an HTTP/2 stream reset or GOAWAY from
+// the peer. net/http keeps these error types unexported (they live in its bundled h2
+// copy), so the only way to recognize them is by message.
+func isHTTP2ConnectionError(err error) bool {
+	msg := err.Error()
+
+	if strings.Contains(msg, "stream error: stream ID ") &&
+		(strings.Contains(msg, "INTERNAL_ERROR") || strings.Contains(msg, "REFUSED_STREAM")) {
+		return true
+	}
+
+	return strings.Contains(msg, "http2: server sent GOAWAY")
 }
 
 // ClassifyUpstreamTransportError converts a transport-level upstream failure into a
@@ -92,7 +115,8 @@ func persistRequestExecutionFailure(
 	chunks ...*httpclient.StreamEvent,
 ) error {
 	status := requestexecution.StatusFailed
-	if errors.Is(rawErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+	if !errors.Is(rawErr, httpclient.ErrStreamIdleTimeout) &&
+		(errors.Is(rawErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)) {
 		status = requestexecution.StatusCanceled
 	}
 

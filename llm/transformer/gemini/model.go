@@ -79,6 +79,24 @@ type Part struct {
 	ThoughtSignature string `json:"thoughtSignature,omitempty"`
 }
 
+func (p Part) isSignatureOnly() bool {
+	return p.ThoughtSignature != "" && p.Text == "" && p.InlineData == nil &&
+		p.FileData == nil && p.FunctionCall == nil && p.FunctionResponse == nil
+}
+
+// MarshalJSON keeps the empty text payload of a standalone thought signature.
+// Gemini streaming can return this part in the final chunk of a text response.
+func (p Part) MarshalJSON() ([]byte, error) {
+	type partAlias Part
+	if p.isSignatureOnly() {
+		return json.Marshal(struct {
+			partAlias
+			Text string `json:"text"`
+		}{partAlias: partAlias(p)})
+	}
+	return json.Marshal(partAlias(p))
+}
+
 // UnmarshalJSON accepts inline_data as a fallback for inlineData.
 func (p *Part) UnmarshalJSON(data []byte) error {
 	type partAlias Part
@@ -514,6 +532,10 @@ type UsageMetadata struct {
 	// PromptTokenCount is the number of tokens in the prompt.
 	// When cachedContent is set, this is still the total effective prompt size meaning this includes the number of tokens in the cached content.
 	PromptTokenCount int64 `json:"promptTokenCount,omitempty"`
+
+	// ToolUsePromptTokenCount is the number of tokens in the results of tool-use
+	// (e.g. Google Search, URL context) that were fed back into the prompt.
+	ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount,omitempty"`
 
 	// CandidatesTokenCount is the total number of tokens across all generated candidates.
 	// The CandidatesTokenCount does not include the ThoughtsTokenCount.

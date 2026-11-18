@@ -39,6 +39,8 @@ const (
 //
 //nolint:containedctx // Checked.
 type InboundPersistentStream struct {
+	current *httpclient.StreamEvent
+
 	ctx             context.Context
 	stream          streams.Stream[*httpclient.StreamEvent]
 	request         *ent.Request
@@ -82,7 +84,7 @@ func NewInboundPersistentStream(
 		closed:          false,
 		closeDone:       make(chan struct{}),
 		state:           state,
-		terminalTracker: NewStreamTerminalTrackerForRequest(request),
+		terminalTracker: NewStreamTerminalTrackerForRequest(request, state),
 		lifecycle:       streamLifecycleFromContext(ctx),
 	}
 
@@ -90,15 +92,26 @@ func NewInboundPersistentStream(
 }
 
 func (ts *InboundPersistentStream) Next() bool {
-	return ts.stream.Next()
+	ts.current = nil
+	if !ts.stream.Next() {
+		return false
+	}
+	ts.recordCurrent()
+	return true
 }
 
 func (ts *InboundPersistentStream) ExpectedStreamChoices() int {
 	return ts.terminalTracker.expectedChoices
 }
 
+// Current is a cached read; repeated reads must not duplicate persisted chunks.
 func (ts *InboundPersistentStream) Current() *httpclient.StreamEvent {
+	return ts.current
+}
+
+func (ts *InboundPersistentStream) recordCurrent() {
 	event := ts.stream.Current()
+	ts.current = event
 	if event != nil {
 		// For raw binary audio chunks (TTS stream_format=audio), persist only a size
 		// summary to avoid buffering the full audio payload in memory.
@@ -117,8 +130,6 @@ func (ts *InboundPersistentStream) Current() *httpclient.StreamEvent {
 			}
 		}
 	}
-
-	return event
 }
 
 // IsTerminalStreamEvent classifies one event with the default single-choice
@@ -383,7 +394,7 @@ func (ts *InboundPersistentStream) Close() error {
 		persistCtx := context.WithoutCancel(ctx)
 
 		if ts.request != nil {
-			if err := ts.requestService.UpdateRequestStatusFromError(persistCtx, ts.request, decision.cause, ts.responseChunks...); err != nil {
+			if err := ts.requestService.UpdateRequestStatusFromError(persistCtx, ts.request, decision.cause, finalRequestResponseHeaders(persistCtx, ts.state), ts.responseChunks...); err != nil {
 				log.Warn(persistCtx, "Failed to update request status from error", log.Cause(err))
 			}
 		}
@@ -401,7 +412,7 @@ func (ts *InboundPersistentStream) Close() error {
 		persistCtx := context.WithoutCancel(ctx)
 		// Persist partial chunks with the failed status for debugging.
 		if ts.request != nil {
-			if err := ts.requestService.UpdateRequestStatusFromError(persistCtx, ts.request, decision.cause, ts.responseChunks...); err != nil {
+			if err := ts.requestService.UpdateRequestStatusFromError(persistCtx, ts.request, decision.cause, finalRequestResponseHeaders(persistCtx, ts.state), ts.responseChunks...); err != nil {
 				log.Warn(persistCtx, "Failed to update request status from error", log.Cause(err))
 			}
 		}
@@ -464,7 +475,7 @@ func (ts *InboundPersistentStream) _persistResponse(ctx context.Context, respons
 	}
 
 	status := ts.terminalState.requestStatus()
-	err := ts.requestService.UpdateRequestFinalized(ctx, ts.request, status, meta.ID, responseBody, metrics, ts.responseChunks...)
+	err := ts.requestService.UpdateRequestFinalized(ctx, ts.request, status, meta.ID, responseBody, metrics, finalRequestResponseHeaders(ctx, ts.state), ts.responseChunks...)
 	if err != nil {
 		log.Warn(ctx, "Failed to update finalized request", log.Cause(err), log.Any("status", status))
 	}

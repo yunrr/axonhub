@@ -103,6 +103,8 @@ type Channel struct {
 type ChannelServiceParams struct {
 	fx.In
 
+	ModelCache *ModelCacheService
+
 	CacheConfig     xcache.Config
 	Ent             *ent.Client
 	SystemService   *SystemService
@@ -115,6 +117,7 @@ type ChannelServiceParams struct {
 
 func NewChannelService(params ChannelServiceParams) *ChannelService {
 	svc := &ChannelService{
+		modelCache: params.ModelCache,
 		AbstractService: &AbstractService{
 			db: params.Ent,
 		},
@@ -171,6 +174,8 @@ func (svc *ChannelService) Stop() {
 
 type ChannelService struct {
 	*AbstractService
+
+	modelCache *ModelCacheService
 
 	SystemService   *SystemService
 	WebhookNotifier *WebhookNotifier

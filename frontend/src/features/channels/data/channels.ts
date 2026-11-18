@@ -126,6 +126,7 @@ const CREATE_CHANNEL_MUTATION = `
         transformOptions {
           forceArrayInstructions
           forceArrayInputs
+          forceArrayStop
           replaceDeveloperRoleWithSystem
           reasoningEffortMapping { from to }
         }
@@ -226,6 +227,7 @@ const DUPLICATE_CHANNEL_MUTATION = `
         transformOptions {
           forceArrayInstructions
           forceArrayInputs
+          forceArrayStop
           replaceDeveloperRoleWithSystem
           reasoningEffortMapping { from to }
         }
@@ -326,6 +328,7 @@ const BULK_CREATE_CHANNELS_MUTATION = `
         transformOptions {
           forceArrayInstructions
           forceArrayInputs
+          forceArrayStop
           replaceDeveloperRoleWithSystem
           reasoningEffortMapping { from to }
         }
@@ -425,6 +428,7 @@ const CHANNEL_FIELDS_FRAGMENT = `
         transformOptions {
           forceArrayInstructions
           forceArrayInputs
+          forceArrayStop
           replaceDeveloperRoleWithSystem
           reasoningEffortMapping { from to }
         }
@@ -667,6 +671,7 @@ const BULK_IMPORT_CHANNELS_MUTATION = `
           transformOptions {
             forceArrayInstructions
             forceArrayInputs
+            forceArrayStop
             replaceDeveloperRoleWithSystem
             reasoningEffortMapping { from to }
           }
@@ -749,6 +754,7 @@ const GET_CHANNEL_DISABLED_API_KEYS_QUERY = `
           errorCode
           reason
           expiresAt
+          quotaDisabled
         }
       }
     }
@@ -914,6 +920,7 @@ const BULK_UPDATE_CHANNEL_ORDERING_MUTATION = `
           transformOptions {
             forceArrayInstructions
             forceArrayInputs
+            forceArrayStop
             replaceDeveloperRoleWithSystem
             reasoningEffortMapping { from to }
           }
@@ -1196,6 +1203,7 @@ const CHANNEL_QUERY_FULL_NODE_SELECTION = `
             transformOptions {
               forceArrayInstructions
               forceArrayInputs
+              forceArrayStop
               replaceDeveloperRoleWithSystem
               reasoningEffortMapping { from to }
             }
@@ -1256,6 +1264,7 @@ const CHANNEL_QUERY_FULL_NODE_SELECTION = `
             errorCode
             reason
             expiresAt
+            quotaDisabled
           }
           liveLimiterStats {
             inFlight
@@ -1289,6 +1298,7 @@ const CHANNEL_QUERY_LIST_NODE_BASE_SELECTION = `
             errorCode
             reason
             expiresAt
+            quotaDisabled
            }
 `;
 
@@ -2549,6 +2559,7 @@ export function useChannelDisabledAPIKeys(channelId: string, options?: { enabled
               errorCode: number;
               reason?: string | null;
               expiresAt?: string | null;
+              quotaDisabled?: boolean;
             }>;
           };
         }>(GET_CHANNEL_DISABLED_API_KEYS_QUERY, { id: channelId });
@@ -2583,6 +2594,8 @@ export function useDisableChannelAPIKey() {
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['channelDisabledAPIKeys', variables.channelID] });
       queryClient.invalidateQueries({ queryKey: ['channels'] });
+      // Key eligibility feeds the quota popover, so its cache is stale too.
+      queryClient.invalidateQueries({ queryKey: ['provider-quotas'] });
       toast.success(t('channels.messages.disableAPIKeySuccess'));
     },
   });
@@ -2609,6 +2622,8 @@ export function useEnableChannelAPIKey() {
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['channelDisabledAPIKeys', variables.channelID] });
       queryClient.invalidateQueries({ queryKey: ['channels'] });
+      // Key eligibility feeds the quota popover, so its cache is stale too.
+      queryClient.invalidateQueries({ queryKey: ['provider-quotas'] });
       toast.success(t('channels.messages.enableAPIKeySuccess'));
     },
   });
@@ -2634,6 +2649,8 @@ export function useEnableAllChannelAPIKeys() {
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['channelDisabledAPIKeys', variables.channelID] });
       queryClient.invalidateQueries({ queryKey: ['channels'] });
+      // Key eligibility feeds the quota popover, so its cache is stale too.
+      queryClient.invalidateQueries({ queryKey: ['provider-quotas'] });
       toast.success(t('channels.messages.enableAllAPIKeysSuccess'));
     },
   });
@@ -2660,6 +2677,8 @@ export function useEnableSelectedChannelAPIKeys() {
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['channelDisabledAPIKeys', variables.channelID] });
       queryClient.invalidateQueries({ queryKey: ['channels'] });
+      // Key eligibility feeds the quota popover, so its cache is stale too.
+      queryClient.invalidateQueries({ queryKey: ['provider-quotas'] });
       toast.success(t('channels.messages.enableSelectedAPIKeysSuccess'));
     },
   });
@@ -2686,6 +2705,8 @@ export function useDeleteDisabledChannelAPIKeys() {
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['channelDisabledAPIKeys', variables.channelID] });
       queryClient.invalidateQueries({ queryKey: ['channels'] });
+      // Key eligibility feeds the quota popover, so its cache is stale too.
+      queryClient.invalidateQueries({ queryKey: ['provider-quotas'] });
 
       // Show appropriate message based on the result
       if (data.message === 'ONE_KEY_PRESERVED') {

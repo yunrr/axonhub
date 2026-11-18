@@ -19,7 +19,6 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -62,6 +61,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
   const [testingKey, setTestingKey] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, TestAPIKeyResult>>({});
   const [confirmDisableKey, setConfirmDisableKey] = useState<string | null>(null);
+  const [confirmKeepDisabledKey, setConfirmKeepDisabledKey] = useState<string | null>(null);
   const [confirmEnableKey, setConfirmEnableKey] = useState<string | null>(null);
   const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
   const [confirmDeleteSelected, setConfirmDeleteSelected] = useState(false);
@@ -167,6 +167,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
       setTestingKey(null);
       setTestResults({});
       setConfirmDisableKey(null);
+      setConfirmKeepDisabledKey(null);
       setConfirmEnableKey(null);
       setConfirmDeleteKey(null);
       setConfirmDeleteSelected(false);
@@ -205,6 +206,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
     setTestingKey(null);
     setTestResults({});
     setConfirmDisableKey(null);
+    setConfirmKeepDisabledKey(null);
     setConfirmEnableKey(null);
     setConfirmDeleteKey(null);
     setConfirmDeleteSelected(false);
@@ -444,6 +446,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
     try {
       await disableAPIKey.mutateAsync({ channelID: currentRow.id, key });
       setConfirmDisableKey(null);
+      setConfirmKeepDisabledKey(null);
     } catch {
       // handled by hooks
     }
@@ -567,7 +570,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
               </div>
             </div>
 
-            <ScrollArea className='min-h-0 flex-1'>
+            <div className='min-h-0 flex-1 overflow-y-auto'>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -599,6 +602,8 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
                     validKeys.map((key) => {
                       const isTesting = testingKey === key;
                       const isDisabled = isKeyDisabled(key);
+                      const disabledKey = disabledKeys.find((item) => item.key === key);
+                      const isQuotaDisabled = disabledKey?.quotaDisabled === true;
                       const result = getKeyResult(key);
                       const displayName = displayCredential(key);
                       const canDelete = !isLastKey && key !== OAUTH_CREDENTIAL_REF;
@@ -633,6 +638,11 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
                               {isTesting && <IconLoader2 className='h-3 w-3 animate-spin text-muted-foreground' />}
                               <code className='bg-muted rounded px-2 py-0.5 font-mono text-sm'>{result ? result.keyPrefix : displayName}</code>
                             </div>
+                            {isQuotaDisabled && (
+                              <div className='mt-1 text-xs text-muted-foreground'>
+                                {t('channels.dialogs.keyManagement.quotaDisabled')}
+                              </div>
+                            )}
                             {result?.error && (
                               <div className='mt-1 flex items-start gap-1 text-xs text-destructive'>
                                 <IconAlertTriangle className='mt-0.5 h-3 w-3 shrink-0' />
@@ -676,26 +686,55 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
                               </Tooltip>
 
                               {isDisabled ? (
-                                <Popover open={confirmEnableKey === key} onOpenChange={(o) => setConfirmEnableKey(o ? key : null)}>
-                                  <PopoverTrigger asChild>
-                                    <Button size='sm' variant='ghost' className='h-7 w-7 p-0' disabled={isPending}>
-                                      <IconRefresh className='h-4 w-4' />
-                                    </Button>
-                                  </PopoverTrigger>
-                                  <PopoverContent className='w-64'>
-                                    <div className='flex flex-col gap-3'>
-                                      <p className='text-sm'>{t('channels.dialogs.keyManagement.confirmEnable')}</p>
-                                      <div className='flex justify-end gap-2'>
-                                        <Button size='sm' variant='outline' onClick={() => setConfirmEnableKey(null)}>
-                                          {t('common.buttons.cancel')}
-                                        </Button>
-                                        <Button size='sm' onClick={() => handleToggleEnable(key)} disabled={isPending}>
-                                          {t('common.buttons.confirm')}
-                                        </Button>
+                                <>
+                                  <Popover open={confirmEnableKey === key} onOpenChange={(o) => setConfirmEnableKey(o ? key : null)}>
+                                    <PopoverTrigger asChild>
+                                      <Button size='sm' variant='ghost' className='h-7 w-7 p-0' disabled={isPending}>
+                                        <IconRefresh className='h-4 w-4' />
+                                      </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className='w-64'>
+                                      <div className='flex flex-col gap-3'>
+                                        <p className='text-sm'>{t('channels.dialogs.keyManagement.confirmEnable')}</p>
+                                        <div className='flex justify-end gap-2'>
+                                          <Button size='sm' variant='outline' onClick={() => setConfirmEnableKey(null)}>
+                                            {t('common.buttons.cancel')}
+                                          </Button>
+                                          <Button size='sm' onClick={() => handleToggleEnable(key)} disabled={isPending}>
+                                            {t('common.buttons.confirm')}
+                                          </Button>
+                                        </div>
                                       </div>
-                                    </div>
-                                  </PopoverContent>
-                                </Popover>
+                                    </PopoverContent>
+                                  </Popover>
+                                  {isQuotaDisabled && (
+                                    <Popover
+                                      open={confirmKeepDisabledKey === key}
+                                      onOpenChange={(o) => setConfirmKeepDisabledKey(o ? key : null)}
+                                    >
+                                      <PopoverTrigger asChild>
+                                        <Button size='sm' variant='outline' className='h-7 px-2' disabled={isPending}>
+                                          {t('channels.dialogs.keyManagement.keepDisabled')}
+                                        </Button>
+                                      </PopoverTrigger>
+                                      <PopoverContent className='w-72'>
+                                        <div className='flex flex-col gap-3'>
+                                          <p className='text-sm'>
+                                            {t('channels.dialogs.keyManagement.confirmKeepDisabled')}
+                                          </p>
+                                          <div className='flex justify-end gap-2'>
+                                            <Button size='sm' variant='outline' onClick={() => setConfirmKeepDisabledKey(null)}>
+                                              {t('common.buttons.cancel')}
+                                            </Button>
+                                            <Button size='sm' onClick={() => handleToggleDisable(key)} disabled={isPending}>
+                                              {t('common.buttons.confirm')}
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      </PopoverContent>
+                                    </Popover>
+                                  )}
+                                </>
                               ) : (
                                 <Popover open={confirmDisableKey === key} onOpenChange={(o) => setConfirmDisableKey(o ? key : null)}>
                                   <PopoverTrigger asChild>
@@ -747,7 +786,7 @@ export function ChannelsAPIKeyManagementDialog({ open, onOpenChange }: ChannelsA
                   )}
                 </TableBody>
               </Table>
-            </ScrollArea>
+            </div>
           </div>
         </div>
 

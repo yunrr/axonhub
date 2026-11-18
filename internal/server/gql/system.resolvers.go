@@ -282,7 +282,7 @@ func (r *mutationResolver) CheckProviderQuotas(ctx context.Context) (bool, error
 }
 
 // ResetChannelQuotaNow is the resolver for the resetChannelQuotaNow field.
-func (r *mutationResolver) ResetChannelQuotaNow(ctx context.Context, channelID objects.GUID, subscriptionID *string) (bool, error) {
+func (r *mutationResolver) ResetChannelQuotaNow(ctx context.Context, channelID objects.GUID, subscriptionID *string, resetID *string) (bool, error) {
 	if !scopes.UserHasScope(ctx, scopes.ScopeWriteChannels) {
 		return false, fmt.Errorf("permission denied: requires write:channels scope")
 	}
@@ -291,11 +291,11 @@ func (r *mutationResolver) ResetChannelQuotaNow(ctx context.Context, channelID o
 		return false, fmt.Errorf("provider quota service is not available")
 	}
 
-	var subscriptionIDs []string
-	if subscriptionID != nil {
-		subscriptionIDs = []string{*subscriptionID}
+	target := biz.QuotaResetTarget{
+		SubscriptionID: lo.FromPtr(subscriptionID),
+		ResetID:        lo.FromPtr(resetID),
 	}
-	if err := r.providerQuotaService.ResetChannelQuotaNow(ctx, channelID.ID, subscriptionIDs...); err != nil {
+	if err := r.providerQuotaService.ResetChannelQuotaNow(ctx, channelID.ID, target); err != nil {
 		return false, fmt.Errorf("failed to reset channel quota: %w", err)
 	}
 

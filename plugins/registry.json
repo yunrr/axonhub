@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "plugins": [
     {
+      "id": "local.day-card",
+      "name": "每日用量卡",
+      "description": "移植自 magpie 的每日用量卡。把一天的用量画成小票：费用、连续天数、每把 API Key 及其模型。数字用服务端聚合，不拉取用量明细。",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "url": "https://github.com/looplj/axonhub-day-card/releases/download/v0.1.0/day-card-0.1.0.axplugin",
+          "sha256": "5c7cd366581168bdab831eab7c524b123ac3eed7bae8c0e0f2f2732dcbc3ea55",
+          "axonhubVersion": "^1.0.0"
+        }
+      ]
+    },
+    {
       "id": "local.jev-guard",
       "name": "Jev 请求审查",
       "description": "在请求进入上游模型之前，用 Jev 判断一组可配置的分类。任一分类达到拦截阈值时返回 403，并写入拦截记录。低于阈值的请求继续，不落库。",
@@ -36,6 +49,19 @@
           "version": "0.1.0",
           "url": "https://github.com/looplj/axonhub-reset-watch/releases/download/v0.1.0/reset-watch-0.1.0.axplugin",
           "sha256": "dc1902f3fe10b8669b162c77d3c6110b1d124711e8bb3ff0988034787c7da851",
+          "axonhubVersion": "^1.0.0"
+        }
+      ]
+    },
+    {
+      "id": "jinyuliu.bucket-rotate",
+      "name": "载荷存储切桶",
+      "description": "自动读取 AxonHub 已配置的 S3 数据存储，当前默认桶接近阈值（如 Cloudflare R2 免费 10G）时按指定顺序切到下一个桶；历史请求仍从原桶读取，无需迁移。附状态页。",
+      "versions": [
+        {
+          "version": "0.2.0",
+          "url": "https://github.com/jin-yu-liu/axonhub-bucket-rotate/releases/download/v0.2.0/bucket-rotate-0.2.0.axplugin",
+          "sha256": "8bf785f4bc274b33c2278dc7d44e2460b4cd0dae98ba4df4bf8b1c49dcd9a5bd",
           "axonhubVersion": "^1.0.0"
         }
       ]

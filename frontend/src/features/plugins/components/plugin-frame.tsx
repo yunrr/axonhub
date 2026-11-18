@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
+import { nanoid } from 'nanoid';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useSelectedProjectId } from '@/stores/projectStore';
@@ -73,7 +74,7 @@ function PluginFrameAttempt({
   const { theme, colorScheme } = useTheme();
   const currentProjectId = useSelectedProjectId();
   const selectedProjectId = actionKey === undefined ? currentProjectId : null;
-  const [instanceId] = useState(() => crypto.randomUUID());
+  const [instanceId] = useState(() => nanoid());
   const router = useRouter();
   const [prefersDark, setPrefersDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
   const [failed, setFailed] = useState(false);
@@ -179,7 +180,7 @@ function PluginFrameAttempt({
       previous.abort.abort();
       window.clearTimeout(previous.helloTimer);
     }
-    const id = crypto.randomUUID();
+    const id = nanoid();
     const abort = new AbortController();
     const helloTimer = window.setTimeout(() => {
       const current = sessionRef.current;
@@ -501,7 +502,8 @@ function PluginFrameAttempt({
       data-testid='plugin-frame'
       title={title ?? pageKey ?? actionKey}
       src={pluginFrameSrc(sessionQuery.data.token, entry)}
-      sandbox='allow-scripts allow-forms'
+      sandbox='allow-scripts allow-forms allow-downloads'
+      allow='clipboard-write'
       referrerPolicy='no-referrer'
       className='h-full min-h-0 w-full flex-1 border-0'
       onLoad={beginSession}
