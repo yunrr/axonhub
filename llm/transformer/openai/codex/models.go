@@ -25,7 +25,7 @@ func SupportsModelCatalog(baseURL string) bool {
 }
 
 // ModelsRequest uses the same OAuth provider and client version as inference.
-func ModelsRequest(ctx context.Context, tokens oauth.TokenGetter, baseURL string) (*httpclient.Request, error) {
+func ModelsRequest(ctx context.Context, tokens oauth.TokenGetter, baseURL, clientVersion string) (*httpclient.Request, error) {
 	creds, err := tokens.Get(ctx)
 	if err != nil {
 		return nil, err
@@ -33,6 +33,14 @@ func ModelsRequest(ctx context.Context, tokens oauth.TokenGetter, baseURL string
 	if baseURL == "" || baseURL == "https://api.openai.com/v1" {
 		baseURL = codexBaseURL
 	}
+	endpoint, err := url.Parse(strings.TrimRight(baseURL, "#"))
+	if err != nil {
+		return nil, fmt.Errorf("parse Codex model catalog URL: %w", err)
+	}
+	endpoint = endpoint.JoinPath("models")
+	query := endpoint.Query()
+	query.Set("client_version", clientVersion)
+	endpoint.RawQuery = query.Encode()
 	headers := make(http.Header)
 	// A keyless channel carries no bearer token; discover its catalog
 	// unauthenticated instead of sending an empty Authorization header.
@@ -40,7 +48,7 @@ func ModelsRequest(ctx context.Context, tokens oauth.TokenGetter, baseURL string
 		headers.Set("Authorization", "Bearer "+creds.AccessToken)
 	}
 	headers.Set("Accept", "application/json")
-	headers.Set("Version", codexDefaultVersion)
+	headers.Set("Version", clientVersion)
 	headers.Set("Originator", AxonHubOriginator)
 	headers.Set(BetaFeaturesHeader, fabricatedBetaFeatures)
 	if accountID := ExtractChatGPTAccountIDFromJWT(creds.AccessToken); accountID != "" {
@@ -48,7 +56,7 @@ func ModelsRequest(ctx context.Context, tokens oauth.TokenGetter, baseURL string
 	}
 	return &httpclient.Request{
 		Method:  http.MethodGet,
-		URL:     strings.TrimRight(baseURL, "/#") + "/models?client_version=" + codexDefaultVersion,
+		URL:     endpoint.String(),
 		Headers: headers,
 	}, nil
 }

@@ -218,6 +218,9 @@ type ChannelSettings struct {
 	// TransformOptions configures the transform options for the channel.
 	TransformOptions TransformOptions `json:"transformOptions"`
 
+	// SyncModelPrices opts into overwriting saved channel prices, including manual edits, with endpoint prices for every listed model.
+	SyncModelPrices bool `json:"syncModelPrices,omitempty"`
+
 	// PassThroughUserAgent controls whether to pass through the original User-Agent header to upstream AI providers.
 	// When set to nil, it inherits from the global system setting.
 	// When set to true/false, it overrides the global setting.
@@ -815,6 +818,32 @@ type ChannelPolicies struct {
 	// evaluated before the global retry policy when the mode is custom, and the
 	// first match owns the failure. Unmatched custom failures fall back to global.
 	APIKeyAutoDisableRules []APIKeyAutoDisableRule `json:"apiKeyAutoDisableRules,omitempty"`
+
+	// ScheduledDisable is an operator-configured wall-clock off/on schedule.
+	// Independent of APIKeyAutoDisableRules: a disabled channel is never
+	// evaluated for failure rules, so the two mechanisms do not interact.
+	ScheduledDisable *ChannelScheduledDisable `json:"scheduledDisable,omitempty"`
+}
+
+// ChannelScheduledDisable configures a wall-clock schedule that disables the
+// channel on disableCron and, when a re-enable is configured, re-enables it.
+// Empty timezone means UTC. The disable cron is the only required field:
+// without a re-enable the channel stays disabled until an operator re-enables
+// it.
+//
+// ReenableMode selects the re-enable behavior:
+//   - "" (default): no automatic re-enable.
+//   - "cron": re-enable at the first ReenableCron occurrence after the disable.
+//   - "opposite": re-enable one hour after the last consecutive matching
+//     minute of DisableCron — i.e. when the schedule's off window ends. A cron
+//     that matches every minute has no off window, so the channel stays
+//     disabled. Re-enableCron/ReenableTimezone are ignored in this mode.
+type ChannelScheduledDisable struct {
+	DisableCron      string `json:"disableCron"`
+	DisableTimezone  string `json:"disableTimezone,omitempty"`
+	ReenableMode     string `json:"reenableMode,omitempty"`
+	ReenableCron     string `json:"reenableCron,omitempty"`
+	ReenableTimezone string `json:"reenableTimezone,omitempty"`
 }
 
 // EffectiveAutoDisableMode returns the mode used at evaluation time.

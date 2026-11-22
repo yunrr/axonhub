@@ -520,6 +520,7 @@ type ComplexityRoot struct {
 	ChannelPolicies struct {
 		APIKeyAutoDisableMode  func(childComplexity int) int
 		APIKeyAutoDisableRules func(childComplexity int) int
+		ScheduledDisable       func(childComplexity int) int
 		Stream                 func(childComplexity int) int
 	}
 
@@ -576,6 +577,14 @@ type ComplexityRoot struct {
 		StreamFirstEventTimeoutSeconds  func(childComplexity int) int
 	}
 
+	ChannelScheduledDisable struct {
+		DisableCron      func(childComplexity int) int
+		DisableTimezone  func(childComplexity int) int
+		ReenableCron     func(childComplexity int) int
+		ReenableMode     func(childComplexity int) int
+		ReenableTimezone func(childComplexity int) int
+	}
+
 	ChannelSettings struct {
 		APIKeyRoundRobinSwitchAfter func(childComplexity int) int
 		APIKeyStrategy              func(childComplexity int) int
@@ -598,6 +607,7 @@ type ComplexityRoot struct {
 		ResponseTimeout             func(childComplexity int) int
 		RetryableErrorPatterns      func(childComplexity int) int
 		RetryableStatusCodes        func(childComplexity int) int
+		SyncModelPrices             func(childComplexity int) int
 		TransformOptions            func(childComplexity int) int
 	}
 
@@ -673,6 +683,11 @@ type ComplexityRoot struct {
 		ModelCount     func(childComplexity int) int
 		Success        func(childComplexity int) int
 		UpstreamStatus func(childComplexity int) int
+	}
+
+	CodexCatalogVersion struct {
+		Source  func(childComplexity int) int
+		Version func(childComplexity int) int
 	}
 
 	CodexCompatibilitySettings struct {
@@ -822,9 +837,11 @@ type ComplexityRoot struct {
 	}
 
 	FetchModelsPayload struct {
-		Error    func(childComplexity int) int
-		Fallback func(childComplexity int) int
-		Models   func(childComplexity int) int
+		CodexCatalogSkippedReason func(childComplexity int) int
+		CodexCatalogVersion       func(childComplexity int) int
+		Error                     func(childComplexity int) int
+		Fallback                  func(childComplexity int) int
+		Models                    func(childComplexity int) int
 	}
 
 	FilterCondition struct {
@@ -970,7 +987,8 @@ type ComplexityRoot struct {
 	}
 
 	ModelIdentify struct {
-		ID func(childComplexity int) int
+		ID      func(childComplexity int) int
+		Pricing func(childComplexity int) int
 	}
 
 	ModelIdentityWithStatus struct {
@@ -1980,9 +1998,12 @@ type ComplexityRoot struct {
 	}
 
 	SyncChannelModelsPayload struct {
-		ChannelID       func(childComplexity int) int
-		ManualModels    func(childComplexity int) int
-		SupportedModels func(childComplexity int) int
+		ChannelID                 func(childComplexity int) int
+		CodexCatalogSkippedReason func(childComplexity int) int
+		CodexCatalogVersion       func(childComplexity int) int
+		Fallback                  func(childComplexity int) int
+		ManualModels              func(childComplexity int) int
+		SupportedModels           func(childComplexity int) int
 	}
 
 	System struct {
@@ -4480,6 +4501,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.ChannelPolicies.APIKeyAutoDisableRules(childComplexity), true
+	case "ChannelPolicies.scheduledDisable":
+		if e.complexity.ChannelPolicies.ScheduledDisable == nil {
+			break
+		}
+
+		return e.complexity.ChannelPolicies.ScheduledDisable(childComplexity), true
 	case "ChannelPolicies.stream":
 		if e.complexity.ChannelPolicies.Stream == nil {
 			break
@@ -4669,6 +4696,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.ChannelResponseTimeout.StreamFirstEventTimeoutSeconds(childComplexity), true
 
+	case "ChannelScheduledDisable.disableCron":
+		if e.complexity.ChannelScheduledDisable.DisableCron == nil {
+			break
+		}
+
+		return e.complexity.ChannelScheduledDisable.DisableCron(childComplexity), true
+	case "ChannelScheduledDisable.disableTimezone":
+		if e.complexity.ChannelScheduledDisable.DisableTimezone == nil {
+			break
+		}
+
+		return e.complexity.ChannelScheduledDisable.DisableTimezone(childComplexity), true
+	case "ChannelScheduledDisable.reenableCron":
+		if e.complexity.ChannelScheduledDisable.ReenableCron == nil {
+			break
+		}
+
+		return e.complexity.ChannelScheduledDisable.ReenableCron(childComplexity), true
+	case "ChannelScheduledDisable.reenableMode":
+		if e.complexity.ChannelScheduledDisable.ReenableMode == nil {
+			break
+		}
+
+		return e.complexity.ChannelScheduledDisable.ReenableMode(childComplexity), true
+	case "ChannelScheduledDisable.reenableTimezone":
+		if e.complexity.ChannelScheduledDisable.ReenableTimezone == nil {
+			break
+		}
+
+		return e.complexity.ChannelScheduledDisable.ReenableTimezone(childComplexity), true
+
 	case "ChannelSettings.apiKeyRoundRobinSwitchAfter":
 		if e.complexity.ChannelSettings.APIKeyRoundRobinSwitchAfter == nil {
 			break
@@ -4795,6 +4853,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.ChannelSettings.RetryableStatusCodes(childComplexity), true
+	case "ChannelSettings.syncModelPrices":
+		if e.complexity.ChannelSettings.SyncModelPrices == nil {
+			break
+		}
+
+		return e.complexity.ChannelSettings.SyncModelPrices(childComplexity), true
 	case "ChannelSettings.transformOptions":
 		if e.complexity.ChannelSettings.TransformOptions == nil {
 			break
@@ -5058,6 +5122,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.CodexCatalogTestResult.UpstreamStatus(childComplexity), true
+
+	case "CodexCatalogVersion.source":
+		if e.complexity.CodexCatalogVersion.Source == nil {
+			break
+		}
+
+		return e.complexity.CodexCatalogVersion.Source(childComplexity), true
+	case "CodexCatalogVersion.version":
+		if e.complexity.CodexCatalogVersion.Version == nil {
+			break
+		}
+
+		return e.complexity.CodexCatalogVersion.Version(childComplexity), true
 
 	case "CodexCompatibilitySettings.channelID":
 		if e.complexity.CodexCompatibilitySettings.ChannelID == nil {
@@ -5571,6 +5648,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.FastestModel.TokensCount(childComplexity), true
 
+	case "FetchModelsPayload.codexCatalogSkippedReason":
+		if e.complexity.FetchModelsPayload.CodexCatalogSkippedReason == nil {
+			break
+		}
+
+		return e.complexity.FetchModelsPayload.CodexCatalogSkippedReason(childComplexity), true
+	case "FetchModelsPayload.codexCatalogVersion":
+		if e.complexity.FetchModelsPayload.CodexCatalogVersion == nil {
+			break
+		}
+
+		return e.complexity.FetchModelsPayload.CodexCatalogVersion(childComplexity), true
 	case "FetchModelsPayload.error":
 		if e.complexity.FetchModelsPayload.Error == nil {
 			break
@@ -6108,6 +6197,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.ModelIdentify.ID(childComplexity), true
+	case "ModelIdentify.pricing":
+		if e.complexity.ModelIdentify.Pricing == nil {
+			break
+		}
+
+		return e.complexity.ModelIdentify.Pricing(childComplexity), true
 
 	case "ModelIdentityWithStatus.id":
 		if e.complexity.ModelIdentityWithStatus.ID == nil {
@@ -11408,6 +11503,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.SyncChannelModelsPayload.ChannelID(childComplexity), true
+	case "SyncChannelModelsPayload.codexCatalogSkippedReason":
+		if e.complexity.SyncChannelModelsPayload.CodexCatalogSkippedReason == nil {
+			break
+		}
+
+		return e.complexity.SyncChannelModelsPayload.CodexCatalogSkippedReason(childComplexity), true
+	case "SyncChannelModelsPayload.codexCatalogVersion":
+		if e.complexity.SyncChannelModelsPayload.CodexCatalogVersion == nil {
+			break
+		}
+
+		return e.complexity.SyncChannelModelsPayload.CodexCatalogVersion(childComplexity), true
+	case "SyncChannelModelsPayload.fallback":
+		if e.complexity.SyncChannelModelsPayload.Fallback == nil {
+			break
+		}
+
+		return e.complexity.SyncChannelModelsPayload.Fallback(childComplexity), true
 	case "SyncChannelModelsPayload.manualModels":
 		if e.complexity.SyncChannelModelsPayload.ManualModels == nil {
 			break
@@ -13137,6 +13250,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputChannelRateLimitInput,
 		ec.unmarshalInputChannelRegexAssociationInput,
 		ec.unmarshalInputChannelResponseTimeoutInput,
+		ec.unmarshalInputChannelScheduledDisableInput,
 		ec.unmarshalInputChannelSettingsInput,
 		ec.unmarshalInputChannelTagsModelAssociationInput,
 		ec.unmarshalInputChannelTagsRegexAssociationInput,
@@ -22563,6 +22677,8 @@ func (ec *executionContext) fieldContext_Channel_policies(_ context.Context, fie
 				return ec.fieldContext_ChannelPolicies_apiKeyAutoDisableMode(ctx, field)
 			case "apiKeyAutoDisableRules":
 				return ec.fieldContext_ChannelPolicies_apiKeyAutoDisableRules(ctx, field)
+			case "scheduledDisable":
+				return ec.fieldContext_ChannelPolicies_scheduledDisable(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ChannelPolicies", field.Name)
 		},
@@ -22618,6 +22734,8 @@ func (ec *executionContext) fieldContext_Channel_settings(_ context.Context, fie
 				return ec.fieldContext_ChannelSettings_passThroughUserAgent(ctx, field)
 			case "passThroughBody":
 				return ec.fieldContext_ChannelSettings_passThroughBody(ctx, field)
+			case "syncModelPrices":
+				return ec.fieldContext_ChannelSettings_syncModelPrices(ctx, field)
 			case "rateLimit":
 				return ec.fieldContext_ChannelSettings_rateLimit(ctx, field)
 			case "retryableStatusCodes":
@@ -26141,6 +26259,47 @@ func (ec *executionContext) fieldContext_ChannelPolicies_apiKeyAutoDisableRules(
 	return fc, nil
 }
 
+func (ec *executionContext) _ChannelPolicies_scheduledDisable(ctx context.Context, field graphql.CollectedField, obj *objects.ChannelPolicies) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ChannelPolicies_scheduledDisable,
+		func(ctx context.Context) (any, error) {
+			return obj.ScheduledDisable, nil
+		},
+		nil,
+		ec.marshalOChannelScheduledDisable2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐChannelScheduledDisable,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ChannelPolicies_scheduledDisable(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChannelPolicies",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "disableCron":
+				return ec.fieldContext_ChannelScheduledDisable_disableCron(ctx, field)
+			case "disableTimezone":
+				return ec.fieldContext_ChannelScheduledDisable_disableTimezone(ctx, field)
+			case "reenableMode":
+				return ec.fieldContext_ChannelScheduledDisable_reenableMode(ctx, field)
+			case "reenableCron":
+				return ec.fieldContext_ChannelScheduledDisable_reenableCron(ctx, field)
+			case "reenableTimezone":
+				return ec.fieldContext_ChannelScheduledDisable_reenableTimezone(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ChannelScheduledDisable", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ChannelProbe_id(ctx context.Context, field graphql.CollectedField, obj *ent.ChannelProbe) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -27068,6 +27227,151 @@ func (ec *executionContext) fieldContext_ChannelResponseTimeout_nonStreamRespons
 	return fc, nil
 }
 
+func (ec *executionContext) _ChannelScheduledDisable_disableCron(ctx context.Context, field graphql.CollectedField, obj *objects.ChannelScheduledDisable) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ChannelScheduledDisable_disableCron,
+		func(ctx context.Context) (any, error) {
+			return obj.DisableCron, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ChannelScheduledDisable_disableCron(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChannelScheduledDisable",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ChannelScheduledDisable_disableTimezone(ctx context.Context, field graphql.CollectedField, obj *objects.ChannelScheduledDisable) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ChannelScheduledDisable_disableTimezone,
+		func(ctx context.Context) (any, error) {
+			return obj.DisableTimezone, nil
+		},
+		nil,
+		ec.marshalOString2string,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ChannelScheduledDisable_disableTimezone(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChannelScheduledDisable",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ChannelScheduledDisable_reenableMode(ctx context.Context, field graphql.CollectedField, obj *objects.ChannelScheduledDisable) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ChannelScheduledDisable_reenableMode,
+		func(ctx context.Context) (any, error) {
+			return obj.ReenableMode, nil
+		},
+		nil,
+		ec.marshalOString2string,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ChannelScheduledDisable_reenableMode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChannelScheduledDisable",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ChannelScheduledDisable_reenableCron(ctx context.Context, field graphql.CollectedField, obj *objects.ChannelScheduledDisable) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ChannelScheduledDisable_reenableCron,
+		func(ctx context.Context) (any, error) {
+			return obj.ReenableCron, nil
+		},
+		nil,
+		ec.marshalOString2string,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ChannelScheduledDisable_reenableCron(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChannelScheduledDisable",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ChannelScheduledDisable_reenableTimezone(ctx context.Context, field graphql.CollectedField, obj *objects.ChannelScheduledDisable) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ChannelScheduledDisable_reenableTimezone,
+		func(ctx context.Context) (any, error) {
+			return obj.ReenableTimezone, nil
+		},
+		nil,
+		ec.marshalOString2string,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ChannelScheduledDisable_reenableTimezone(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChannelScheduledDisable",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ChannelSettings_extraModelPrefix(ctx context.Context, field graphql.CollectedField, obj *objects.ChannelSettings) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -27474,6 +27778,35 @@ func (ec *executionContext) _ChannelSettings_passThroughBody(ctx context.Context
 }
 
 func (ec *executionContext) fieldContext_ChannelSettings_passThroughBody(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ChannelSettings",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ChannelSettings_syncModelPrices(ctx context.Context, field graphql.CollectedField, obj *objects.ChannelSettings) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ChannelSettings_syncModelPrices,
+		func(ctx context.Context) (any, error) {
+			return obj.SyncModelPrices, nil
+		},
+		nil,
+		ec.marshalOBoolean2bool,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ChannelSettings_syncModelPrices(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ChannelSettings",
 		Field:      field,
@@ -29079,6 +29412,64 @@ func (ec *executionContext) _CodexCatalogTestResult_error(ctx context.Context, f
 func (ec *executionContext) fieldContext_CodexCatalogTestResult_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "CodexCatalogTestResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CodexCatalogVersion_version(ctx context.Context, field graphql.CollectedField, obj *biz.CodexCatalogVersion) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_CodexCatalogVersion_version,
+		func(ctx context.Context) (any, error) {
+			return obj.Version, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_CodexCatalogVersion_version(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CodexCatalogVersion",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CodexCatalogVersion_source(ctx context.Context, field graphql.CollectedField, obj *biz.CodexCatalogVersion) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_CodexCatalogVersion_source,
+		func(ctx context.Context) (any, error) {
+			return obj.Source, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_CodexCatalogVersion_source(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CodexCatalogVersion",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
@@ -31603,6 +31994,8 @@ func (ec *executionContext) fieldContext_FetchModelsPayload_models(_ context.Con
 			switch field.Name {
 			case "id":
 				return ec.fieldContext_ModelIdentify_id(ctx, field)
+			case "pricing":
+				return ec.fieldContext_ModelIdentify_pricing(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ModelIdentify", field.Name)
 		},
@@ -31649,9 +32042,9 @@ func (ec *executionContext) _FetchModelsPayload_fallback(ctx context.Context, fi
 			return obj.Fallback, nil
 		},
 		nil,
-		ec.marshalOBoolean2ᚖbool,
+		ec.marshalNBoolean2bool,
 		true,
-		false,
+		true,
 	)
 }
 
@@ -31663,6 +32056,70 @@ func (ec *executionContext) fieldContext_FetchModelsPayload_fallback(_ context.C
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FetchModelsPayload_codexCatalogVersion(ctx context.Context, field graphql.CollectedField, obj *FetchModelsPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FetchModelsPayload_codexCatalogVersion,
+		func(ctx context.Context) (any, error) {
+			return obj.CodexCatalogVersion, nil
+		},
+		nil,
+		ec.marshalOCodexCatalogVersion2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐCodexCatalogVersion,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_FetchModelsPayload_codexCatalogVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FetchModelsPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "version":
+				return ec.fieldContext_CodexCatalogVersion_version(ctx, field)
+			case "source":
+				return ec.fieldContext_CodexCatalogVersion_source(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type CodexCatalogVersion", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FetchModelsPayload_codexCatalogSkippedReason(ctx context.Context, field graphql.CollectedField, obj *FetchModelsPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_FetchModelsPayload_codexCatalogSkippedReason,
+		func(ctx context.Context) (any, error) {
+			return obj.CodexCatalogSkippedReason, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_FetchModelsPayload_codexCatalogSkippedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FetchModelsPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -34368,6 +34825,41 @@ func (ec *executionContext) fieldContext_ModelIdentify_id(_ context.Context, fie
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ModelIdentify_pricing(ctx context.Context, field graphql.CollectedField, obj *biz.ModelIdentify) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ModelIdentify_pricing,
+		func(ctx context.Context) (any, error) {
+			return obj.Pricing, nil
+		},
+		nil,
+		ec.marshalOModelPrice2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐModelPrice,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ModelIdentify_pricing(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ModelIdentify",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "items":
+				return ec.fieldContext_ModelPrice_items(ctx, field)
+			case "schedule":
+				return ec.fieldContext_ModelPrice_schedule(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ModelPrice", field.Name)
 		},
 	}
 	return fc, nil
@@ -38859,6 +39351,12 @@ func (ec *executionContext) fieldContext_Mutation_syncChannelModels(ctx context.
 				return ec.fieldContext_SyncChannelModelsPayload_supportedModels(ctx, field)
 			case "manualModels":
 				return ec.fieldContext_SyncChannelModelsPayload_manualModels(ctx, field)
+			case "fallback":
+				return ec.fieldContext_SyncChannelModelsPayload_fallback(ctx, field)
+			case "codexCatalogVersion":
+				return ec.fieldContext_SyncChannelModelsPayload_codexCatalogVersion(ctx, field)
+			case "codexCatalogSkippedReason":
+				return ec.fieldContext_SyncChannelModelsPayload_codexCatalogSkippedReason(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type SyncChannelModelsPayload", field.Name)
 		},
@@ -54311,6 +54809,10 @@ func (ec *executionContext) fieldContext_Query_fetchModels(ctx context.Context, 
 				return ec.fieldContext_FetchModelsPayload_error(ctx, field)
 			case "fallback":
 				return ec.fieldContext_FetchModelsPayload_fallback(ctx, field)
+			case "codexCatalogVersion":
+				return ec.fieldContext_FetchModelsPayload_codexCatalogVersion(ctx, field)
+			case "codexCatalogSkippedReason":
+				return ec.fieldContext_FetchModelsPayload_codexCatalogSkippedReason(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type FetchModelsPayload", field.Name)
 		},
@@ -61356,6 +61858,99 @@ func (ec *executionContext) _SyncChannelModelsPayload_manualModels(ctx context.C
 }
 
 func (ec *executionContext) fieldContext_SyncChannelModelsPayload_manualModels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SyncChannelModelsPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SyncChannelModelsPayload_fallback(ctx context.Context, field graphql.CollectedField, obj *SyncChannelModelsPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SyncChannelModelsPayload_fallback,
+		func(ctx context.Context) (any, error) {
+			return obj.Fallback, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SyncChannelModelsPayload_fallback(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SyncChannelModelsPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SyncChannelModelsPayload_codexCatalogVersion(ctx context.Context, field graphql.CollectedField, obj *SyncChannelModelsPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SyncChannelModelsPayload_codexCatalogVersion,
+		func(ctx context.Context) (any, error) {
+			return obj.CodexCatalogVersion, nil
+		},
+		nil,
+		ec.marshalOCodexCatalogVersion2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐCodexCatalogVersion,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_SyncChannelModelsPayload_codexCatalogVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SyncChannelModelsPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "version":
+				return ec.fieldContext_CodexCatalogVersion_version(ctx, field)
+			case "source":
+				return ec.fieldContext_CodexCatalogVersion_source(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type CodexCatalogVersion", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SyncChannelModelsPayload_codexCatalogSkippedReason(ctx context.Context, field graphql.CollectedField, obj *SyncChannelModelsPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SyncChannelModelsPayload_codexCatalogSkippedReason,
+		func(ctx context.Context) (any, error) {
+			return obj.CodexCatalogSkippedReason, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_SyncChannelModelsPayload_codexCatalogSkippedReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "SyncChannelModelsPayload",
 		Field:      field,
@@ -75787,7 +76382,7 @@ func (ec *executionContext) unmarshalInputChannelPoliciesInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"stream", "apiKeyAutoDisableMode", "apiKeyAutoDisableRules"}
+	fieldsInOrder := [...]string{"stream", "apiKeyAutoDisableMode", "apiKeyAutoDisableRules", "scheduledDisable"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -75815,6 +76410,13 @@ func (ec *executionContext) unmarshalInputChannelPoliciesInput(ctx context.Conte
 				return it, err
 			}
 			it.APIKeyAutoDisableRules = data
+		case "scheduledDisable":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("scheduledDisable"))
+			data, err := ec.unmarshalOChannelScheduledDisableInput2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐChannelScheduledDisable(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ScheduledDisable = data
 		}
 	}
 
@@ -76480,6 +77082,61 @@ func (ec *executionContext) unmarshalInputChannelResponseTimeoutInput(ctx contex
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputChannelScheduledDisableInput(ctx context.Context, obj any) (objects.ChannelScheduledDisable, error) {
+	var it objects.ChannelScheduledDisable
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"disableCron", "disableTimezone", "reenableMode", "reenableCron", "reenableTimezone"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "disableCron":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("disableCron"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DisableCron = data
+		case "disableTimezone":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("disableTimezone"))
+			data, err := ec.unmarshalOString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DisableTimezone = data
+		case "reenableMode":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reenableMode"))
+			data, err := ec.unmarshalOString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ReenableMode = data
+		case "reenableCron":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reenableCron"))
+			data, err := ec.unmarshalOString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ReenableCron = data
+		case "reenableTimezone":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reenableTimezone"))
+			data, err := ec.unmarshalOString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ReenableTimezone = data
+		}
+	}
+
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputChannelSettingsInput(ctx context.Context, obj any) (objects.ChannelSettings, error) {
 	var it objects.ChannelSettings
 	asMap := map[string]any{}
@@ -76487,7 +77144,7 @@ func (ec *executionContext) unmarshalInputChannelSettingsInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"extraModelPrefix", "modelMappings", "autoTrimedModelPrefixes", "hideOriginalModels", "hideMappedModels", "lowercaseModelId", "proxy", "transformOptions", "headerOverrideOperations", "bodyOverrideOperations", "passThroughUserAgent", "passThroughBody", "rateLimit", "retryableStatusCodes", "retryableErrorPatterns", "maxSingleChannelRetries", "responseTimeout", "modelProtocols", "apiKeyStrategy", "apiKeyRoundRobinSwitchAfter", "providerQuota", "quotaRoutingMode"}
+	fieldsInOrder := [...]string{"extraModelPrefix", "modelMappings", "autoTrimedModelPrefixes", "hideOriginalModels", "hideMappedModels", "lowercaseModelId", "proxy", "transformOptions", "headerOverrideOperations", "bodyOverrideOperations", "passThroughUserAgent", "passThroughBody", "syncModelPrices", "rateLimit", "retryableStatusCodes", "retryableErrorPatterns", "maxSingleChannelRetries", "responseTimeout", "modelProtocols", "apiKeyStrategy", "apiKeyRoundRobinSwitchAfter", "providerQuota", "quotaRoutingMode"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -76578,6 +77235,13 @@ func (ec *executionContext) unmarshalInputChannelSettingsInput(ctx context.Conte
 				return it, err
 			}
 			it.PassThroughBody = data
+		case "syncModelPrices":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("syncModelPrices"))
+			data, err := ec.unmarshalOBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SyncModelPrices = data
 		case "rateLimit":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("rateLimit"))
 			data, err := ec.unmarshalOChannelRateLimitInput2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐChannelRateLimit(ctx, v)
@@ -93417,7 +94081,7 @@ func (ec *executionContext) unmarshalInputUpdateChannelSettingsInput(ctx context
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"extraModelPrefix", "modelMappings", "autoTrimedModelPrefixes", "hideOriginalModels", "hideMappedModels", "lowercaseModelId", "proxy", "transformOptions", "headerOverrideOperations", "bodyOverrideOperations", "passThroughUserAgent", "passThroughBody", "rateLimit", "retryableStatusCodes", "retryableErrorPatterns", "modelProtocols", "apiKeyStrategy", "apiKeyRoundRobinSwitchAfter", "providerQuota", "quotaRoutingMode"}
+	fieldsInOrder := [...]string{"extraModelPrefix", "modelMappings", "autoTrimedModelPrefixes", "hideOriginalModels", "hideMappedModels", "lowercaseModelId", "proxy", "transformOptions", "headerOverrideOperations", "bodyOverrideOperations", "passThroughUserAgent", "passThroughBody", "syncModelPrices", "rateLimit", "retryableStatusCodes", "retryableErrorPatterns", "modelProtocols", "apiKeyStrategy", "apiKeyRoundRobinSwitchAfter", "providerQuota", "quotaRoutingMode"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -93508,6 +94172,13 @@ func (ec *executionContext) unmarshalInputUpdateChannelSettingsInput(ctx context
 				return it, err
 			}
 			it.PassThroughBody = data
+		case "syncModelPrices":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("syncModelPrices"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SyncModelPrices = data
 		case "rateLimit":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("rateLimit"))
 			data, err := ec.unmarshalOChannelRateLimitInput2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐChannelRateLimit(ctx, v)
@@ -103170,6 +103841,8 @@ func (ec *executionContext) _ChannelPolicies(ctx context.Context, sel ast.Select
 			out.Values[i] = ec._ChannelPolicies_apiKeyAutoDisableMode(ctx, field, obj)
 		case "apiKeyAutoDisableRules":
 			out.Values[i] = ec._ChannelPolicies_apiKeyAutoDisableRules(ctx, field, obj)
+		case "scheduledDisable":
+			out.Values[i] = ec._ChannelPolicies_scheduledDisable(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -103692,6 +104365,53 @@ func (ec *executionContext) _ChannelResponseTimeout(ctx context.Context, sel ast
 	return out
 }
 
+var channelScheduledDisableImplementors = []string{"ChannelScheduledDisable"}
+
+func (ec *executionContext) _ChannelScheduledDisable(ctx context.Context, sel ast.SelectionSet, obj *objects.ChannelScheduledDisable) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, channelScheduledDisableImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ChannelScheduledDisable")
+		case "disableCron":
+			out.Values[i] = ec._ChannelScheduledDisable_disableCron(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "disableTimezone":
+			out.Values[i] = ec._ChannelScheduledDisable_disableTimezone(ctx, field, obj)
+		case "reenableMode":
+			out.Values[i] = ec._ChannelScheduledDisable_reenableMode(ctx, field, obj)
+		case "reenableCron":
+			out.Values[i] = ec._ChannelScheduledDisable_reenableCron(ctx, field, obj)
+		case "reenableTimezone":
+			out.Values[i] = ec._ChannelScheduledDisable_reenableTimezone(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var channelSettingsImplementors = []string{"ChannelSettings"}
 
 func (ec *executionContext) _ChannelSettings(ctx context.Context, sel ast.SelectionSet, obj *objects.ChannelSettings) graphql.Marshaler {
@@ -103795,6 +104515,8 @@ func (ec *executionContext) _ChannelSettings(ctx context.Context, sel ast.Select
 			out.Values[i] = ec._ChannelSettings_passThroughUserAgent(ctx, field, obj)
 		case "passThroughBody":
 			out.Values[i] = ec._ChannelSettings_passThroughBody(ctx, field, obj)
+		case "syncModelPrices":
+			out.Values[i] = ec._ChannelSettings_syncModelPrices(ctx, field, obj)
 		case "rateLimit":
 			out.Values[i] = ec._ChannelSettings_rateLimit(ctx, field, obj)
 		case "retryableStatusCodes":
@@ -104419,6 +105141,50 @@ func (ec *executionContext) _CodexCatalogTestResult(ctx context.Context, sel ast
 			out.Values[i] = ec._CodexCatalogTestResult_upstreamStatus(ctx, field, obj)
 		case "error":
 			out.Values[i] = ec._CodexCatalogTestResult_error(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var codexCatalogVersionImplementors = []string{"CodexCatalogVersion"}
+
+func (ec *executionContext) _CodexCatalogVersion(ctx context.Context, sel ast.SelectionSet, obj *biz.CodexCatalogVersion) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, codexCatalogVersionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CodexCatalogVersion")
+		case "version":
+			out.Values[i] = ec._CodexCatalogVersion_version(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "source":
+			out.Values[i] = ec._CodexCatalogVersion_source(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -105649,6 +106415,13 @@ func (ec *executionContext) _FetchModelsPayload(ctx context.Context, sel ast.Sel
 			out.Values[i] = ec._FetchModelsPayload_error(ctx, field, obj)
 		case "fallback":
 			out.Values[i] = ec._FetchModelsPayload_fallback(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "codexCatalogVersion":
+			out.Values[i] = ec._FetchModelsPayload_codexCatalogVersion(ctx, field, obj)
+		case "codexCatalogSkippedReason":
+			out.Values[i] = ec._FetchModelsPayload_codexCatalogSkippedReason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -106768,6 +107541,8 @@ func (ec *executionContext) _ModelIdentify(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "pricing":
+			out.Values[i] = ec._ModelIdentify_pricing(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -117011,6 +117786,15 @@ func (ec *executionContext) _SyncChannelModelsPayload(ctx context.Context, sel a
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "fallback":
+			out.Values[i] = ec._SyncChannelModelsPayload_fallback(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "codexCatalogVersion":
+			out.Values[i] = ec._SyncChannelModelsPayload_codexCatalogVersion(ctx, field, obj)
+		case "codexCatalogSkippedReason":
+			out.Values[i] = ec._SyncChannelModelsPayload_codexCatalogSkippedReason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -130313,6 +131097,21 @@ func (ec *executionContext) marshalOChannelResponseTimeoutMode2githubᚗcomᚋlo
 	return v
 }
 
+func (ec *executionContext) marshalOChannelScheduledDisable2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐChannelScheduledDisable(ctx context.Context, sel ast.SelectionSet, v *objects.ChannelScheduledDisable) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ChannelScheduledDisable(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOChannelScheduledDisableInput2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐChannelScheduledDisable(ctx context.Context, v any) (*objects.ChannelScheduledDisable, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputChannelScheduledDisableInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalOChannelSettings2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐChannelSettings(ctx context.Context, sel ast.SelectionSet, v *objects.ChannelSettings) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -130575,6 +131374,13 @@ func (ec *executionContext) unmarshalOCleanupOptionInput2ᚕgithubᚗcomᚋloopl
 		}
 	}
 	return res, nil
+}
+
+func (ec *executionContext) marshalOCodexCatalogVersion2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋserverᚋbizᚐCodexCatalogVersion(ctx context.Context, sel ast.SelectionSet, v *biz.CodexCatalogVersion) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._CodexCatalogVersion(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOCommandCodeQuotaSettings2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐCommandCodeQuotaSettings(ctx context.Context, sel ast.SelectionSet, v *objects.CommandCodeQuotaSettings) graphql.Marshaler {
@@ -131867,6 +132673,13 @@ func (ec *executionContext) unmarshalOModelOrder2ᚖgithubᚗcomᚋloopljᚋaxon
 	}
 	res, err := ec.unmarshalInputModelOrder(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOModelPrice2ᚖgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐModelPrice(ctx context.Context, sel ast.SelectionSet, v *objects.ModelPrice) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ModelPrice(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOModelProtocol2ᚕgithubᚗcomᚋloopljᚋaxonhubᚋinternalᚋobjectsᚐModelProtocolᚄ(ctx context.Context, sel ast.SelectionSet, v []objects.ModelProtocol) graphql.Marshaler {
