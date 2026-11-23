@@ -2485,8 +2485,8 @@ export function useFetchModels() {
             models: Array<{ id: string; pricing?: ModelPrice | null }>;
             error?: string | null;
             fallback: boolean;
-            codexCatalogVersion?: CodexCatalogVersion | null;
-            codexCatalogSkippedReason?: CodexCatalogSkippedReason | null;
+            codexCatalogVersion: CodexCatalogVersion | null;
+            codexCatalogSkippedReason: CodexCatalogSkippedReason | null;
           };
         }>(FETCH_MODELS_QUERY, { input });
         return data.fetchModels;
@@ -2498,9 +2498,11 @@ export function useFetchModels() {
     onSuccess: (data, input) => {
       if (data.error) {
         toast.error(t('common.errors.internalServerError'));
-      } else if (data.fallback) {
+      } else if (input.channelType !== 'codex' && data.fallback) {
+        // Non-Codex fallbacks (e.g. Cline) have no inline notice, so they keep the generic warning.
         toast.warning(t('channels.messages.fetchModelsFallback'));
-      } else {
+      } else if (input.channelType !== 'codex' || !data.fallback) {
+        // A Codex catalog fallback is reported inline by the channel dialog instead.
         const count = data.models.length;
         if (count > 100) {
           toast.success(t('channels.messages.fetchModelsSuccessLarge', { count }));
