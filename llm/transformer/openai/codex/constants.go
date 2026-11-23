@@ -1,5 +1,8 @@
 package codex
 
+// AutoReviewModel is the Codex subscription approval reviewer.
+const AutoReviewModel = "codex-auto-review"
+
 // codexImageModels are the image models the catalog may omit; they are appended
 // to every discovered or static model list (see parseModelCatalog).
 var codexImageModels = []string{
@@ -27,7 +30,7 @@ func DefaultModels() []string {
 		"gpt-6-sol",
 		"gpt-6-luna",
 		"gpt-6.1-sol",
-		"codex-auto-review",
+		AutoReviewModel,
 	}
 	return append(models, codexImageModels...)
 }
