@@ -2,6 +2,8 @@
 
 AxonHub 插件。在 `onRequest(ctx, request)` 里调用 [Jev](https://docs.typesafe.ai/primitives/noul)（TypeSafe 的 System One 判别模型），按配置里的分类判断这段文本。判断发生在配额、模型权限、模型映射和选路之前，拦截不会打到上游。
 
+接口地址默认是 `https://api.typesafe.ai/v1/systemone`，可以在「端点」里改成自建或代理的 System One 服务。改成别的主机后，宿主会按 manifest 的出站规则校验；启用或升级时要把对应规则一起勾上，否则请求发不出去。
+
 钩子声明是 `hooks.request: { enabled, requestTypes }`，范围覆盖全部请求类型。放行不返回对象，宿主保留原请求；返回对象会按 replace 整份替换。拦截用 `ctx.reject(403, message)`。
 
 Jev 不生成回复。一次 `POST https://api.typesafe.ai/v1/systemone` 对同一段文本并行回答每条分类，每题返回 0 到 1 的概率。达到拦截阈值就返回 403。
@@ -12,7 +14,7 @@ Jev 不生成回复。一次 `POST https://api.typesafe.ai/v1/systemone` 对同�
 | --- | --- | --- |
 | 放行 | 每条分类都低于拦截阈值 | 不返回对象，原请求继续。不写记录 |
 | 拦截 | 任一分类达到拦截阈值 | `403`，写入拦截记录。多条同时达到时取得分最高的一条 |
-| 检查失败 | 没有 Key、网络失败、响应无法解析 | 默认放行。打开「检查失败时拦截」后返回 `403` |
+| 检查失败 | 没有 Key、端点格式不对、网络失败、响应无法解析 | 默认放行。打开「检查失败时拦截」后返回 `403` |
 
 默认拦截阈值 `0.70`。分类是字符串数组，设置页显示为可增删的列表。每行格式：
 
@@ -59,9 +61,10 @@ pack-plugin plugins/community/jev-guard -o /tmp/jev-guard.axplugin
 ## 安装
 
 1. Owner 打开「插件」›「插件管理」（`/plugins`），上传 `jev-guard.axplugin`。
-2. 启用时授予 `https://api.typesafe.ai/v1/systemone`。不授予的话，请求发不出去。
-3. 先保存 TypeSafe API Key，再启用。`apiKey` 是必填项，空着时启用会被拒绝。Key 在 [console.typesafe.ai](https://console.typesafe.ai) 创建。停用期间可以先不填；启用后不能把 Key 清空。
-4. 侧栏「插件」分组里的「请求审查」页只列出拦截。可以单条删除，也可以清空。
+2. 启用时授予出站规则。默认端点是 `https://api.typesafe.ai/v1/systemone`，这条始终列出；若要改成自建或代理主机，需同时勾选 `^https://[^/?#\s]+/[^?#\s]*$` 这条正则规则。不授予的话，请求发不出去。
+3. 需要改接口地址时，把「端点」填成完整的 https 地址（例如 `https://jev.internal.example/v1/systemone`）。留空或填错都会回落到默认地址；填了但格式不对（非 https、缺主机或带 query）时按「检查失败」处理。
+4. 先保存 TypeSafe API Key，再启用。`apiKey` 是必填项，空着时启用会被拒绝。Key 在 [console.typesafe.ai](https://console.typesafe.ai) 创建。停用期间可以先不填；启用后不能把 Key 清空。
+5. 侧栏「插件」分组里的「请求审查」页只列出拦截。可以单条删除，也可以清空。
 
 ## 验收
 

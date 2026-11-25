@@ -16,6 +16,34 @@ import {
 
 const manifest = JSON.parse(readFileSync(new URL("./manifest.json", import.meta.url), "utf8"));
 
+test("the endpoint defaults to the original URL and accepts an https override", () => {
+  assert.equal(readPolicy({}).endpoint, "https://api.typesafe.ai/v1/systemone");
+  assert.equal(readPolicy({}).endpointValid, true);
+  assert.equal(readPolicy({ endpoint: "  " }).endpoint, "https://api.typesafe.ai/v1/systemone");
+  assert.equal(readPolicy({ endpoint: "https://jev.internal.example/v1/systemone" }).endpoint, "https://jev.internal.example/v1/systemone");
+  assert.equal(readPolicy({ endpoint: "https://jev.internal.example/v1/systemone/" }).endpoint, "https://jev.internal.example/v1/systemone");
+  assert.equal(readPolicy({ endpoint: 42 }).endpoint, "https://api.typesafe.ai/v1/systemone");
+});
+
+test("a non-https or hostless endpoint fails the check instead of pointing at the default", () => {
+  for (const endpoint of ["http://api.typesafe.ai/v1/systemone", "api.typesafe.ai/v1/systemone", "https://", "https://host", "https://host?x=1"]) {
+    const policy = readPolicy({ endpoint });
+    assert.equal(policy.endpointValid, false, endpoint);
+    assert.equal(policy.endpoint, "https://api.typesafe.ai/v1/systemone");
+  }
+});
+
+test("the manifest endpoint default is the original URL and its network rules allow an override", () => {
+  const field = manifest.configSchema.properties.endpoint;
+  assert.equal(field.type, "string");
+  assert.equal(field.default, "https://api.typesafe.ai/v1/systemone");
+  assert.equal(manifest.network[0], "https://api.typesafe.ai/v1/systemone");
+  const rule = new RegExp(manifest.network[1].regex);
+  assert.equal(rule.test("https://jev.internal.example/v1/systemone"), true);
+  assert.equal(rule.test("https://jev.internal.example/v1/systemone?x=1"), false);
+  assert.equal(rule.test("http://jev.internal.example/v1/systemone"), false);
+});
+
 test("manifest categories are the built-in lines", () => {
   const field = manifest.configSchema.properties.categories;
   assert.equal(field.type, "array");

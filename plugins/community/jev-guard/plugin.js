@@ -1,5 +1,4 @@
 import {
-  ENDPOINT,
   MAX_TEXT,
   anyCheck,
   apiKeyOf,
@@ -43,6 +42,9 @@ async function judge(req, ctx, policy) {
   if (raw.length < policy.minChars) {
     return pass();
   }
+  if (!policy.endpointValid) {
+    return unavailable(policy, "invalid_endpoint");
+  }
   const key = apiKeyOf(ctx && ctx.config);
   if (key === "") {
     return unavailable(policy, "missing_api_key");
@@ -50,7 +52,7 @@ async function judge(req, ctx, policy) {
   const text = fitText(raw, MAX_TEXT);
   let response;
   try {
-    response = await ctx.fetch(ENDPOINT, {
+    response = await ctx.fetch(policy.endpoint, {
       method: "POST",
       headers: {
         Authorization: "Bearer " + key,

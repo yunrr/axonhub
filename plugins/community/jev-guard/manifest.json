@@ -2,11 +2,14 @@
   "schemaVersion": 1,
   "id": "local.jev-guard",
   "name": "Jev 请求审查",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "在请求进入上游模型之前，用 Jev 判断一组可配置的分类。任一分类达到拦截阈值时返回 403，并写入拦截记录。低于阈值的请求继续，不落库。",
   "axonhubVersion": "^1.0.0",
   "pluginApiVersion": 1,
-  "network": ["https://api.typesafe.ai/v1/systemone"],
+  "network": [
+    "https://api.typesafe.ai/v1/systemone",
+    { "regex": "^https://[^/?#\\s]+/[^?#\\s]*$" }
+  ],
   "hooks": {
     "request": {
       "enabled": true,
@@ -31,6 +34,12 @@
   "configSchema": {
     "type": "object",
     "properties": {
+      "endpoint": {
+        "type": "string",
+        "title": "端点",
+        "description": "System One 接口的完整 https 地址。留空使用 https://api.typesafe.ai/v1/systemone。指向其他主机时，需在启用或升级时同时授予对应的出站规则。",
+        "default": "https://api.typesafe.ai/v1/systemone"
+      },
       "apiKey": {
         "type": "string",
         "format": "secret",

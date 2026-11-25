@@ -1,6 +1,6 @@
 // Pure Jev screening helpers. plugin.js supplies ctx.fetch and the reject decision.
 
-export const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+export const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const MAX_TEXT = 8000;
 
 const MAX_CATEGORIES = 32;
@@ -23,7 +23,10 @@ const UNAVAILABLE_MESSAGE = "Jev Guard blocked this request: safety check unavai
 
 export function readPolicy(config) {
   const src = config && typeof config === "object" ? config : {};
+  const endpoint = endpointOf(src.endpoint);
   return {
+    endpoint: endpoint === "" ? DEFAULT_ENDPOINT : endpoint,
+    endpointValid: endpoint !== "",
     model: textOr(src.model, "jev-latest"),
     blockThreshold: unit(src.blockThreshold, 0.7),
     categories: categoriesFrom(src.categories),
@@ -76,6 +79,24 @@ function clip(value, max) {
     return value;
   }
   return value.slice(0, max - 1) + "…";
+}
+
+// The endpoint must be the https URL the host can grant. A trailing slash is
+// dropped so an otherwise correct URL still matches the granted rule.
+// An unusable value returns "" and the caller treats the check as unavailable.
+function endpointOf(value) {
+  if (typeof value !== "string") {
+    return DEFAULT_ENDPOINT;
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return DEFAULT_ENDPOINT;
+  }
+  const url = trimmed.replace(/\/+$/, "");
+  if (!/^https:\/\/[^\s/?#]+\/\S*$/.test(url)) {
+    return "";
+  }
+  return url;
 }
 
 export function apiKeyOf(config) {
