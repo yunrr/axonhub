@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
 
 	"github.com/looplj/axonhub/internal/log"
@@ -46,7 +46,17 @@ func serveResponsesWebSocket(
 	process responsesWebSocketProcessFunc,
 	transformError responsesWebSocketErrorFunc,
 ) {
-	if !websocket.IsWebSocketUpgrade(c.Request) {
+	hasToken := func(header, want string) bool {
+		for _, value := range c.Request.Header.Values(header) {
+			for token := range strings.SplitSeq(value, ",") {
+				if strings.EqualFold(strings.TrimSpace(token), want) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if !hasToken("Connection", "upgrade") || !hasToken("Upgrade", "websocket") {
 		JSONError(c, http.StatusBadRequest, errors.New("websocket upgrade required"))
 		return
 	}
@@ -58,24 +68,21 @@ func serveResponsesWebSocket(
 	}
 	c.Request = c.Request.WithContext(ctx)
 
-	responseHeaders := c.Writer.Header().Clone()
-	upgrader := new(websocket.Upgrader)
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, responseHeaders)
+	idleTimer := time.AfterFunc(responsesWebSocketIdleTimeout, cancelSession)
+	defer idleTimer.Stop()
+	conn, err := websocket.Accept(c.Writer, c.Request, &websocket.AcceptOptions{
+		OnPongReceived: func(context.Context, []byte) {
+			idleTimer.Reset(responsesWebSocketIdleTimeout)
+		},
+	})
 	if err != nil {
 		log.Warn(ctx, "Failed to upgrade Responses WebSocket", log.Cause(err))
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.CloseNow() }()
 	writer := &responsesWebSocketWriter{conn: conn}
 
 	conn.SetReadLimit(responsesWebSocketMaxMessageSize)
-	if err := conn.SetReadDeadline(time.Now().Add(responsesWebSocketIdleTimeout)); err != nil {
-		log.Warn(ctx, "Failed to set Responses WebSocket read deadline", log.Cause(err))
-		return
-	}
-	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(responsesWebSocketIdleTimeout))
-	})
 
 	pingDone := make(chan struct{})
 	defer close(pingDone)
@@ -84,20 +91,17 @@ func serveResponsesWebSocket(
 	dispatcher := newResponsesWebSocketDispatcher(ctx, cancelSession, conn, writer, c.Request, requestTimeout, process, transformError)
 	defer dispatcher.wait()
 	for {
-		messageType, message, readErr := conn.ReadMessage()
+		messageType, message, readErr := conn.Read(ctx)
 		if readErr != nil {
-			if !websocket.IsCloseError(readErr, websocket.CloseNormalClosure, websocket.CloseGoingAway) &&
+			if websocket.CloseStatus(readErr) != websocket.StatusNormalClosure && websocket.CloseStatus(readErr) != websocket.StatusGoingAway &&
 				!errors.Is(readErr, io.EOF) && ctx.Err() == nil {
 				log.Warn(ctx, "Failed to read Responses WebSocket message", log.Cause(readErr))
 			}
 			return
 		}
-		if err := conn.SetReadDeadline(time.Now().Add(responsesWebSocketIdleTimeout)); err != nil {
-			log.Warn(ctx, "Failed to refresh Responses WebSocket read deadline", log.Cause(err))
-			return
-		}
+		idleTimer.Reset(responsesWebSocketIdleTimeout)
 
-		if messageType != websocket.TextMessage {
+		if messageType != websocket.MessageText {
 			if err := writeResponsesWebSocketError(writer, invalidResponsesWebSocketRequest("response.create must be sent as a text message", ""), ""); err != nil {
 				return
 			}
@@ -112,20 +116,13 @@ func serveResponsesWebSocket(
 			continue
 		}
 
-		lane, laneErr := dispatcher.lane(streamID)
+		lane, laneErr := dispatcher.admit(streamID, len(message))
 		if laneErr != nil {
 			if err := writeResponsesWebSocketError(writer, laneErr, streamID); err != nil {
 				return
 			}
 			continue
 		}
-		if !dispatcher.reserve(len(message)) {
-			if err := writeResponsesWebSocketError(writer, responsesWebSocketQueueLimitError(), streamID); err != nil {
-				return
-			}
-			continue
-		}
-
 		dispatcher.dispatch(lane, streamID, append([]byte(nil), message...))
 	}
 }
@@ -136,8 +133,7 @@ type responsesWebSocketWriter struct {
 }
 
 type responsesWebSocketMessageWriter interface {
-	SetWriteDeadline(time.Time) error
-	WriteMessage(int, []byte) error
+	Write(context.Context, websocket.MessageType, []byte) error
 }
 
 type responsesWebSocketLane struct {
@@ -205,11 +201,9 @@ func (d *responsesWebSocketDispatcher) reserve(size int) bool {
 	}
 }
 
-func (d *responsesWebSocketDispatcher) lane(streamID string) (*responsesWebSocketLane, *httpclient.Error) {
-	if lane := d.lanes[streamID]; lane != nil {
-		return lane, nil
-	}
-	if streamID != "" && d.namedStreams >= responsesWebSocketMaxNamedStreams {
+func (d *responsesWebSocketDispatcher) admit(streamID string, size int) (*responsesWebSocketLane, *httpclient.Error) {
+	lane := d.lanes[streamID]
+	if lane == nil && streamID != "" && d.namedStreams >= responsesWebSocketMaxNamedStreams {
 		return nil, responsesWebSocketRequestError(
 			"This WebSocket connection has reached its maximum number of distinct stream IDs (32). Reuse an existing stream_id or open a new WebSocket connection.",
 			"stream_id",
@@ -217,9 +211,15 @@ func (d *responsesWebSocketDispatcher) lane(streamID string) (*responsesWebSocke
 		)
 	}
 
+	if !d.reserve(size) {
+		return nil, responsesWebSocketQueueLimitError()
+	}
+	if lane != nil {
+		return lane, nil
+	}
 	ready := make(chan struct{})
 	close(ready)
-	lane := &responsesWebSocketLane{tail: ready}
+	lane = &responsesWebSocketLane{tail: ready}
 	lane.owner = shared.NewResponsesLane("responses-lane-"+uuid.NewString(), d.retainedBudget)
 	lane.session.budget = d.retainedBudget
 	d.lanes[streamID] = lane
@@ -243,7 +243,7 @@ func (d *responsesWebSocketDispatcher) dispatch(lane *responsesWebSocketLane, st
 				log.Error(d.ctx, "Panic while processing Responses WebSocket request", log.Any("panic", recovered))
 				d.closeOnce.Do(func() {
 					d.cancel()
-					_ = d.conn.Close()
+					_ = d.conn.CloseNow()
 				})
 			}
 		}()
@@ -266,7 +266,7 @@ func (d *responsesWebSocketDispatcher) dispatch(lane *responsesWebSocketLane, st
 			}
 			d.closeOnce.Do(func() {
 				d.cancel()
-				_ = d.conn.Close()
+				_ = d.conn.CloseNow()
 			})
 		}
 	})
@@ -274,7 +274,12 @@ func (d *responsesWebSocketDispatcher) dispatch(lane *responsesWebSocketLane, st
 
 func (d *responsesWebSocketDispatcher) processMessage(lane *responsesWebSocketLane, streamID string, message []byte) error {
 	request, warmup, requestErr := lane.session.prepareRequest(d.rawRequest, message)
-	defer lane.session.releaseConsumedWarmup()
+	defer func() {
+		if lane.session.mergedBytes > 0 {
+			lane.session.budget.Replace(lane.session.mergedBytes, 0)
+			lane.session.mergedBytes = 0
+		}
+	}()
 	if requestErr != nil {
 		return writeResponsesWebSocketError(d.writer, requestErr, streamID)
 	}
@@ -283,6 +288,9 @@ func (d *responsesWebSocketDispatcher) processMessage(lane *responsesWebSocketLa
 	}
 
 	requestCtx := shared.WithResponsesLane(d.ctx, lane.owner)
+	if lane.session.mergedBytes > 0 {
+		requestCtx = orchestrator.WithResponsesWarmupAccepted(requestCtx, lane.session.releaseWarmup)
+	}
 	var cancel context.CancelFunc
 	if d.requestTimeout > 0 {
 		requestCtx, cancel = context.WithTimeout(requestCtx, d.requestTimeout)
@@ -296,11 +304,16 @@ func (d *responsesWebSocketDispatcher) processMessage(lane *responsesWebSocketLa
 
 	result, processErr := d.process(requestCtx, request)
 	if processErr != nil {
-		lane.owner.RetireLeases()
+		if lane.session.mergedBytes == 0 || lane.session.warmupID == "" {
+			lane.owner.RetireLeases()
+		}
 		httpErr := transformResponsesWebSocketError(requestCtx, processErr, d.transformError)
 		return writeResponsesWebSocketError(d.writer, httpErr, streamID)
 	}
 
+	if lane.session.mergedBytes > 0 {
+		lane.session.releaseWarmup()
+	}
 	return writeResponsesWebSocketResult(requestCtx, d.writer, result, d.transformError, streamID)
 }
 
@@ -326,8 +339,12 @@ func runResponsesWebSocketPings(ctx context.Context, conn *websocket.Conn, done 
 	for {
 		select {
 		case <-ticker.C:
-			deadline := time.Now().Add(responsesWebSocketPingWriteTimeout)
-			if err := conn.WriteControl(websocket.PingMessage, nil, deadline); err != nil {
+			pingCtx, cancel := context.WithTimeout(ctx, responsesWebSocketPingWriteTimeout)
+			err := conn.Ping(pingCtx)
+			cancel()
+			// A missing pong is governed by the refreshed session idle timer.
+			// Ping also waits for the pong, unlike a control-frame-only write.
+			if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 				return
 			}
 		case <-done:
@@ -384,6 +401,7 @@ type responsesWebSocketSession struct {
 	warmupPayload map[string]json.RawMessage
 	budget        *shared.ResponsesBudget
 	warmupBytes   int
+	mergedBytes   int
 }
 
 type responsesWebSocketWarmup struct {
@@ -431,12 +449,7 @@ func (s *responsesWebSocketSession) prepareRequest(
 			}
 			return nil, nil, invalidResponsesWebSocketRequest(err.Error(), "input")
 		}
-		s.warmupID = ""
-		s.warmupPayload = nil
-		if s.budget != nil {
-			s.budget.Replace(s.warmupBytes, 0)
-		}
-		s.warmupBytes = mergedBytes
+		s.mergedBytes = mergedBytes
 	}
 
 	if !generate {
@@ -450,9 +463,10 @@ func (s *responsesWebSocketSession) prepareRequest(
 			s.budget = shared.NewResponsesBudget(64 << 20)
 		}
 		size := responsesWarmupBytes(payload)
-		if !s.budget.Replace(s.warmupBytes, size) {
+		if !s.budget.Replace(s.warmupBytes+s.mergedBytes, size) {
 			return nil, nil, responsesWebSocketRetentionLimitError()
 		}
+		s.mergedBytes = 0
 		s.warmupBytes = size
 		s.warmupID = id
 		s.warmupPayload = cloneResponsesWebSocketPayload(payload)
@@ -659,7 +673,7 @@ func writeResponsesWebSocketResult(
 			eventType := gjson.GetBytes(event.Data, "type").String()
 			status := gjson.GetBytes(event.Data, "response.status").String()
 			if err := writeStreamDelivery(ctx, stream, func() (bool, error) {
-				if err := writeResponsesWebSocketMessage(writer, websocket.TextMessage, data); err != nil {
+				if err := writeResponsesWebSocketMessage(writer, websocket.MessageText, data); err != nil {
 					return false, err
 				}
 				terminal := !terminalSeen && terminalTracker.Observe(event)
@@ -679,6 +693,13 @@ func writeResponsesWebSocketResult(
 			return writeResponsesWebSocketError(writer, transformResponsesWebSocketError(ctx, err, transformError), streamID)
 		}
 
+		if !terminalSeen && !errors.Is(ctx.Err(), context.Canceled) {
+			err := ctx.Err()
+			if err == nil {
+				err = orchestrator.ErrStreamIncomplete
+			}
+			return writeResponsesWebSocketError(writer, transformResponsesWebSocketError(ctx, err, transformError), streamID)
+		}
 		return nil
 	}
 
@@ -810,15 +831,13 @@ func withResponsesWebSocketStreamID(data []byte, streamID string) ([]byte, error
 	return json.Marshal(event)
 }
 
-func writeResponsesWebSocketMessage(writer *responsesWebSocketWriter, messageType int, data []byte) error {
+func writeResponsesWebSocketMessage(writer *responsesWebSocketWriter, messageType websocket.MessageType, data []byte) error {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
 
-	if err := writer.conn.SetWriteDeadline(time.Now().Add(responsesWebSocketWriteTimeout)); err != nil {
-		return err
-	}
-
-	return writer.conn.WriteMessage(messageType, data)
+	ctx, cancel := context.WithTimeout(context.Background(), responsesWebSocketWriteTimeout)
+	defer cancel()
+	return writer.conn.Write(ctx, messageType, data)
 }
 
 func writeResponsesWebSocketJSON(writer *responsesWebSocketWriter, value any) error {
@@ -827,5 +846,5 @@ func writeResponsesWebSocketJSON(writer *responsesWebSocketWriter, value any) er
 		return err
 	}
 
-	return writeResponsesWebSocketMessage(writer, websocket.TextMessage, data)
+	return writeResponsesWebSocketMessage(writer, websocket.MessageText, data)
 }

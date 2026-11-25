@@ -248,6 +248,57 @@ pass-through 会覆盖 onRequest 的非 model 改写，宿主记录 overriddenBy
 
 ctx.request 使用 camelCase：projectId、apiKeyId、model、requestType、apiFormat，值来自进入中间件时；Playground 的 apiKeyId 为 null。ctx.attempt 仅在 onAttempt 提供 channel（id、name、type）、实际 model 和出站 apiFormat，不含凭证。body 不一定含 model；从 ctx.attempt.model 读取实际模型。插件无法通过此接口修改 URL、方法、HTTP 头或凭证。
 
+## 托管数据表
+
+在 `manifest.json` 声明表并申请 `tables` 权限。AxonHub 在启用时创建物理表，
+插件通过当前安装访问自己的表。同一个 manifest ID 重装后会自动接回保留的数据。
+卸载默认保留托管表，勾选「同时永久删除托管表数据」可清除。
+
+物理表使用 `axp_` 前缀，例如 `axp_42_daily_usage`，插件代码使用声明名
+`daily_usage`。MySQL 和 TiDB 执行表迁移或清理时，主库连接池至少需要两个连接。
+
+```json
+{
+  "permissions": ["tables"],
+  "tables": {
+    "daily_usage": {
+      "columns": {
+        "day": { "type": "string", "maxLength": 10 },
+        "requests": { "type": "integer" }
+      },
+      "indexes": [{ "columns": ["day"], "unique": true }]
+    }
+  }
+}
+```
+
+```js
+const usage = ctx.tables.open("daily_usage")
+usage.upsert({ conflict: ["day"], row: { day: "2026-11-23", requests: 42 } })
+const page = usage.list({
+  where: [{ column: "day", op: "gte", value: "2026-11-01" }],
+  orderBy: [{ column: "day", direction: "desc" }],
+  first: 30
+})
+```
+
+- 每行有宿主分配的整数 `id`。支持 `insert(row)`、`get(id)`、`update(id, patch)`、
+  `delete(id)` 和 `upsert({ conflict, row })`。`conflict` 必须按顺序匹配已声明的
+  唯一索引。记录不存在时，读取和更新返回 `null`，删除返回布尔值。
+- `list({ where, orderBy, first, after })` 返回 `{ rows, nextCursor }`。下一页使用
+  相同的筛选、排序和返回的游标。筛选以 AND 组合，支持 `eq`、`lt`、`lte`、`gt`、
+  `gte`。排序字段必须非空，宿主追加主键保证顺序稳定。默认 50 行，最多 100 行。
+- 字段类型支持 `string`、`text`、`integer`、`number` 和 `boolean`。`string`
+  需设置 `maxLength`，字段默认必填，可用 `nullable` 允许空值。超出 JavaScript 安全
+  范围的整数使用十进制字符串。升级可以新增表、可空列和普通索引。新表可以声明唯一索引。
+- 托管表只需 `tables` 授权。动态 `sql` 仍是主数据库授权。托管接口限制参数大小、
+  返回量、写入速率和执行时间。
+
+插件页面使用 `window.axonhub.tables.open("daily_usage")` 打开同一张托管表。
+方法名、参数和返回数据与 `ctx.tables` 一致，页面读写方法返回 Promise。
+插件需要获得 `tables` 授权，当前用户需要 `write_plugins` 或 Owner 权限。
+[待办清单示例](../../../plugins/examples/table-todos/README.md) 在页面上演示了这些操作。
+
 ## 定时任务与动态 SQL
 
 manifest 可声明定时任务和 `sql` 权限。下面展示这两个字段及其 JS 入口。
@@ -281,9 +332,28 @@ export function onTask(ctx, run) {
 
 一个插件最多声明 16 个任务。`tasks` 的对象键是任务标识。`schedule` 需要五段 `cron`，并可指定 IANA `timezone`（默认 UTC）。宿主调用 `onTask(ctx, { key, runId, trigger, scheduledAt })`。`trigger` 为 `scheduled` 或 `manual`，手动执行时 `scheduledAt` 为 `null`。
 
-在插件详情中可查看下次触发和最近 20 次执行结果。Owner 可以暂停自动触发、修改时间或立即执行。多个实例共用数据库领取记录。同一计划时刻最多领取一次，错过的分钟和上次执行尚未结束的触发会跳过。任务最多运行 30 秒。实例退出后的未完成执行会显示为「结果未知」。
+在插件详情中可查看下次触发和最近 20 次执行结果。Owner 可以暂停自动触发、修改时间或立即执行。多个实例共用数据库领取记录。同一计划时刻最多领取一次，错过的分钟和上次执行尚未结束的触发会跳过。任务最多运行 30 秒。升级后仍声明且插件仍可运行的任务，可以继续已经开始的执行。停用插件或移除任务会取消其运行。实例退出后的未完成执行会显示为「结果未知」。
 
 多副本部署请在所有实例升级后安装声明 `tasks` 的插件。
+
+### 定时任务中的 GraphQL 和导航角标
+
+`ctx.graphql(query, variables?, { operationName }?)` 返回包含 `data` 和 `errors` 的 GraphQL 响应。查询和 mutation 都使用本次安装已有的授权。手动触发和定时触发使用同一插件身份。要求登录用户的操作仍须具备用户身份。
+
+比较目录时，`channels` 提供 `supportedModels`，`models` 提供 `catalogAliases` 和 `catalogPrices`。授权 `read_channels` 后，可用 `modelCatalogOffers(providers, first, after, refresh)` 查询站点配置的目录。第一页传 `refresh: true` 可以重新拉取上游，后续页传回 `nextCursor` 并省略 `refresh`。目录来源和内容相同时，刷新或切换副本后仍可继续翻页。任一变化时，从第一页重新查询。`source` 返回 `upstream` 或 `fallback`。
+
+`ctx.ui.setBadge(target, badge)` 为本次安装声明的页面或顶部动作设置角标。可以传正整数 `count` 或 `dot: true`，以及可选的 `tone`（`accent`、`warning`、`danger`）。传 `null` 清除。调用成功时保存角标，插件页面关闭时宿主也会刷新状态。
+
+```js
+export function onTask(ctx) {
+  const result = ctx.graphql("{ channels(first: 10) { totalCount } }");
+  if (result.errors?.length) throw new Error(result.errors[0].message);
+  const count = result.data.channels.totalCount;
+  ctx.ui.setBadge({ type: "action", key: "report" }, count ? { count } : null);
+}
+```
+
+使用 `type: "page"` 和页面键可以在侧栏入口展示角标。带角标的顶部动作收进更多菜单时，更多按钮会显示圆点。
 
 ### 动态 SQL
 
@@ -611,15 +681,17 @@ Owner 启用插件时，授予的是 `permissions` 的子集和 `network` 的子
 
 ## 发布
 
-AxonHub 读取[社区插件索引](https://raw.githubusercontent.com/looplj/axonhub-plugins/main/registry.json)。索引可以独立于 AxonHub 版本更新。开发示例放在 AxonHub 仓库。
+AxonHub 读取[社区插件索引](https://raw.githubusercontent.com/looplj/axonhub-plugins/main/registry.json)。索引可以独立于 AxonHub 版本更新。
 
-需要集中打包和发版时，向 [axonhub-plugins](https://github.com/looplj/axonhub-plugins) 的 `plugins/` 提交源码。如果插件在独立仓库维护，把 zip 发布到 HTTPS 地址，例如 GitHub Release。对 zip 原始字节计算 `sha256`，使用 64 位小写十六进制：
+需要集中打包和发版时，向 AxonHub 的 [`plugins/community/`](../../../plugins/community/) 提交源码，在 `manifest.json` 中递增插件版本。合并到 `unstable` 后，AxonHub 向 [axonhub-plugins](https://github.com/looplj/axonhub-plugins) 发送 `community-plugins` 事件，带上这个提交的 SHA。那边的 workflow 检出该提交，为新版本打包、创建 tag 和 GitHub Release，并更新市场索引。
+
+如果插件在独立仓库维护，把 zip 发布到 HTTPS 地址，例如 GitHub Release。对 zip 原始字节计算 `sha256`，使用 64 位小写十六进制：
 
 ```bash
 shasum -a 256 temperature-cap-1.0.0.axplugin
 ```
 
-要收录独立维护的插件，向 [axonhub-plugins](https://github.com/looplj/axonhub-plugins) 提交 PR，在 `external-plugins.json` 的 `plugins` 数组里添加条目。`versions` 里每一项都要有 `version`、`url`、`sha256` 和 `axonhubVersion`：
+要收录独立维护的插件，向 [axonhub-plugins](https://github.com/looplj/axonhub-plugins) 提交 PR，在 `external-plugins.json` 的 `plugins` 数组里添加条目。合并到 `main` 后，索引会按这份登记重写。`versions` 里每一项都要有 `version`、`url`、`sha256` 和 `axonhubVersion`：
 
 ```json
 {
@@ -648,6 +720,7 @@ AxonHub 根据索引核对下载包的 SHA-256、插件 ID 和版本。Owner 在
 | [Failover Guard](../../../plugins/examples/failover-guard/README.md) | `onEvent` 使用 `ctx.counter`、`ctx.axonhub.channels.disable` 和 `ctx.webhook.send` |
 | [Star 历史](../../../plugins/examples/star-history/README.md) | 页面通过 `axonhub.fetch` 访问已授予的 `network` 规则 |
 | [Temperature Cap](../../../plugins/examples/temperature-cap/README.md) | `onRequest` 按配置返回带 `temperature` 的完整请求 |
+| [模型目录检查](../../../plugins/examples/model-catalog-check/README.md) | 定时任务使用 GraphQL 检查目录，并用顶部角标显示待复核数量 |
 | [DeepSeek Harness Session Trace](../../../plugins/examples/dsh-session-trace/README.md) | 用服务端中间件根据会话请求头提供 trace ID |
 
 ## 限制

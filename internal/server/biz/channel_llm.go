@@ -1185,8 +1185,15 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 		if c.Credentials.IsOAuth() {
 			tokens, err := svc.assembleOAuthTokenProvider(c, ch,
 				func(entry *objects.NamedOAuthCredentials, onRefreshed func(ctx context.Context, refreshed *oauth.OAuthCredentials) error) (oauth.TokenGetter, AutoRefresher, error) {
+					creds := entry.Credentials
+					if creds.RefreshToken == "" && creds.ExpiresAt.IsZero() {
+						// Only the upstream can check the validity of an access-only
+						// token with no known expiry.
+						return oauth.NewStaticTokenProvider(creds), nil, nil
+					}
+
 					p := claudecode.NewTokenProvider(oauth.TokenProviderParams{
-						Credentials: entry.Credentials,
+						Credentials: creds,
 						HTTPClient:  httpClient,
 						OnRefreshed: onRefreshed,
 					})
@@ -1208,7 +1215,6 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 			}
 
 			ch.Outbound = transformer
-			setupAutoRefresh(ch, tokens, oauth.AutoRefreshOptions{})
 
 			return ch, nil
 		}

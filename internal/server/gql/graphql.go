@@ -31,7 +31,6 @@ import (
 	"github.com/looplj/axonhub/internal/ent/request"
 	"github.com/looplj/axonhub/internal/ent/requestexecution"
 	"github.com/looplj/axonhub/internal/ent/role"
-	"github.com/looplj/axonhub/internal/ent/system"
 	"github.com/looplj/axonhub/internal/ent/thread"
 	"github.com/looplj/axonhub/internal/ent/trace"
 	"github.com/looplj/axonhub/internal/ent/usagelog"
@@ -138,6 +137,10 @@ func NewGraphqlHandlers(deps Dependencies) *GraphqlHandler {
 	gqlSrv.Use(graphqlTransactions(deps.Ent))
 	gqlSrv.SetErrorPresenter(presentGraphqlError)
 
+	if deps.PluginManager != nil {
+		deps.PluginManager.SetGraphQLExecutor(newTaskGraphQLExecutor(schema, deps.Ent))
+	}
+
 	return &GraphqlHandler{
 		Graphql:       gqlSrv,
 		PluginGraphql: newPluginGraphqlHandler(schema, deps.Ent, deps.PluginManager),
@@ -202,8 +205,8 @@ func skipGraphqlTransaction(oc *graphql.OperationContext) bool {
 		switch f.Name {
 		case "bulkImportChannels", "applyCatalogImport", "checkProviderQuotas", "resetChannelQuotaNow":
 			return true
-		case "runPluginTask":
-			// The schedule claim commits before JavaScript runs on its own connections.
+		case "runPluginTask", "enablePlugin", "installPlugin", "installPluginFromMarket", "pluginTableOperation":
+			// Plugin tasks and storage operations manage their own transactions.
 			return true
 		}
 	}
@@ -268,15 +271,24 @@ func newPluginGraphqlHandler(schema graphql.ExecutableSchema, client *ent.Client
 	srv := handler.New(schema)
 	srv.AddTransport(transport.POST{})
 	srv.SetQueryCache(lru.New[*ast.QueryDocument](1024))
+	configurePluginGraphQL(srv, client)
+	return &pluginGraphqlHTTPHandler{
+		handler: srv,
+		manager: manager,
+	}
+}
+
+func configurePluginGraphQL(srv interface {
+	Use(graphql.HandlerExtension)
+	AroundOperations(graphql.OperationMiddleware)
+	SetErrorPresenter(graphql.ErrorPresenterFunc)
+}, client *ent.Client,
+) {
 	srv.Use(extension.FixedComplexityLimit(pluginGraphqlComplexityLimit))
 	srv.Use(&loggingTracer{})
 	srv.AroundOperations(rejectPluginGraphqlOperation)
 	srv.Use(graphqlTransactions(client))
 	srv.SetErrorPresenter(presentGraphqlError)
-	return &pluginGraphqlHTTPHandler{
-		handler: srv,
-		manager: manager,
-	}
 }
 
 // apiKeyReadOnly keeps service-account API keys read-only on the admin GraphQL
@@ -309,7 +321,6 @@ var guidTypeToNodeType = map[string]string{
 	ent.TypeRequest:                 request.Table,
 	ent.TypeRequestExecution:        requestexecution.Table,
 	ent.TypeRole:                    role.Table,
-	ent.TypeSystem:                  system.Table,
 	ent.TypeUsageLog:                usagelog.Table,
 	ent.TypeProject:                 project.Table,
 	ent.TypeUserProject:             userproject.Table,
