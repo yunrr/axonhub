@@ -516,6 +516,9 @@ type ChannelCredentials struct {
 	// The project and region must remain paired with the API key when keys rotate.
 	VertexAPIKeys []VertexAPIKey `json:"vertexApiKeys,omitempty"`
 
+	// VertexServiceAccounts shares Vertex credential selection with API keys.
+	VertexServiceAccounts []GCPCredential `json:"vertexServiceAccounts,omitempty"`
+
 	// ManagementAPIKey is an optional provider management/console API key used only
 	// for server-side quota checks (e.g. ZenMux). It is never attached to inference
 	// requests and never exposed to clients beyond credential write APIs.
@@ -583,12 +586,13 @@ const OAuthCredentialRef = "__oauth__"
 
 // GetAllCredentialRefs returns the identities of every credential the channel
 // can be disabled on. Key-based channels are identified by the API keys
-// themselves. An OAuth channel is identified by its named OAuth credential
-// entries: multi-entry channels use the entry IDs, and a legacy single-OAuth
-// channel keeps the fixed OAuthCredentialRef sentinel so that existing disable
-// records keep matching. The sentinel and the entry IDs must never reach
+// themselves; service accounts use stable signing-key references. An OAuth
+// channel is identified by its named OAuth credential entries: multi-entry
+// channels use the entry IDs, and a legacy single-OAuth channel keeps the fixed
+// OAuthCredentialRef sentinel so that existing disable records keep matching.
+// The sentinel, the entry IDs and the service account refs must never reach
 // outbound requests as API keys; the rotation provider translates refs into
-// OAuth credentials.
+// real credentials.
 func (c *ChannelCredentials) GetAllCredentialRefs() []string {
 	if c == nil {
 		return nil
@@ -604,7 +608,14 @@ func (c *ChannelCredentials) GetAllCredentialRefs() []string {
 		return refs
 	}
 
-	return c.GetAllAPIKeys()
+	refs := c.GetAllAPIKeys()
+	for _, credential := range c.VertexServiceAccounts {
+		if ref := credential.CredentialRef(); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+
+	return refs
 }
 
 // GetEnabledCredentialRefs returns the credential refs that are not disabled.

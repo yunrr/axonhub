@@ -18,6 +18,16 @@ import (
 
 const allKeysDisabledErrorPrefix = "All API keys disabled"
 
+// GetChannelForCredentialTest loads metadata before a forced credential is selected.
+// It deliberately avoids constructing an outbound from an all-disabled key set.
+func (svc *ChannelService) GetChannelForCredentialTest(ctx context.Context, channelID int) (*Channel, error) {
+	entity, err := svc.entFromContext(ctx).Channel.Get(ctx, channelID)
+	if err != nil {
+		return nil, fmt.Errorf("channel not found: %w", err)
+	}
+	return buildChannel(entity, svc.httpClient), nil
+}
+
 // DisableAPIKey 禁用指定 key；若所有 key 都不可用则禁用 channel.
 func (svc *ChannelService) DisableAPIKey(
 	ctx context.Context,
@@ -346,6 +356,7 @@ func (svc *ChannelService) DeleteDisabledAPIKeys(ctx context.Context, channelID 
 		}
 	}
 
+	result := &DeleteDisabledAPIKeysResult{Success: true}
 	newCredentials := ch.Credentials
 
 	if ch.Credentials.IsOAuth() {
@@ -369,8 +380,6 @@ func (svc *ChannelService) DeleteDisabledAPIKeys(ctx context.Context, channelID 
 			}
 		}
 	}
-
-	result := &DeleteDisabledAPIKeysResult{Success: true}
 
 	// Vertex keys are stored as project-bound triples and also surface through
 	// GetAllAPIKeys. Leaving the triple behind would keep the key selectable while
@@ -398,27 +407,61 @@ func (svc *ChannelService) DeleteDisabledAPIKeys(ctx context.Context, channelID 
 		}
 	}
 
+	// Service account credentials are identity refs like API keys, so they take
+	// part in the same delete-and-filter pass.
+	newCredentials.VertexServiceAccounts = lo.Filter(newCredentials.VertexServiceAccounts, func(credential objects.GCPCredential, _ int) bool {
+		_, found := keysToDelete[credential.CredentialRef()]
+		return !found
+	})
+
 	// Ensure at least one credential remains. For OAuth channels the preserved
 	// credential stays as an entry; for key channels the first deleted key is
 	// restored. Either way the credential comes back enabled, matching the
 	// historical behaviour for plain API keys — the auto-disable flow
 	// re-disables it explicitly when needed.
-	if len(newCredentials.GetAllCredentialRefs()) == 0 {
+	if len(newCredentials.GetAllCredentialRefs()) == 0 && len(keys) > 0 {
 		restoredKey := keys[0]
+		restored := false
 
-		if ch.Credentials.IsOAuth() {
+		// Restore the credential back into the shape it came from. Writing a
+		// service account or Vertex key ref into APIKeys would leave the channel
+		// pointing at a credential that cannot authenticate anything.
+		switch {
+		case ch.Credentials.IsOAuth():
 			entries := ch.Credentials.GetAllOAuthCredentials()
 			for i := range entries {
 				if entries[i].ID == restoredKey {
 					newCredentials.OAuths = []objects.NamedOAuthCredentials{entries[i]}
+					restored = true
 					break
 				}
 			}
-		} else {
-			newCredentials.APIKeys = []string{restoredKey}
+		default:
+			for _, credential := range ch.Credentials.VertexServiceAccounts {
+				if credential.CredentialRef() == restoredKey {
+					newCredentials.VertexServiceAccounts = []objects.GCPCredential{credential}
+					restored = true
+					break
+				}
+			}
+			if !restored {
+				for _, credential := range ch.Credentials.VertexAPIKeys {
+					if credential.APIKey == restoredKey {
+						newCredentials.VertexAPIKeys = []objects.VertexAPIKey{credential}
+						restored = true
+						break
+					}
+				}
+			}
+			if !restored {
+				newCredentials.APIKeys = []string{restoredKey}
+				restored = true
+			}
 		}
 
-		result.Message = "ONE_KEY_PRESERVED"
+		if restored {
+			result.Message = "ONE_KEY_PRESERVED"
+		}
 	}
 
 	update := svc.entFromContext(ctx).Channel.UpdateOneID(channelID).

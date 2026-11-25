@@ -564,6 +564,13 @@ type TestAPIKeyResult struct {
 	Disabled  bool
 }
 
+func testCredentialPrefix(ref string) string {
+	if strings.HasPrefix(ref, "vertex-sa:") {
+		return "vertex-sa:****" + ref[len(ref)-4:]
+	}
+	return xsecret.MaskAPIKey(ref)
+}
+
 // TestChannelAPIKeysResult represents the aggregated result of testing all API keys.
 type TestChannelAPIKeysResult struct {
 	ChannelID    objects.GUID
@@ -598,7 +605,9 @@ func credentialRefDisplayName(ch *biz.Channel, ref string) string {
 		}
 	}
 
-	return xsecret.MaskAPIKey(ref)
+	// fall back to the shared prefix helper so service account refs mask as
+	// vertex-sa:****xxxx instead of going through the plain API key masker.
+	return testCredentialPrefix(ref)
 }
 
 // TestChannelAPIKeys tests all API keys for a specific channel individually.
@@ -614,12 +623,12 @@ func (processor *TestChannelOrchestrator) TestChannelAPIKeys(
 		return nil, xerrors.ForbiddenError("channel testing is not available to plugins")
 	}
 
-	ch, err := processor.channelService.GetChannel(ctx, channelID.ID)
+	ch, err := processor.channelService.GetChannelForCredentialTest(ctx, channelID.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	allKeys := channelCredentialRefs(ch)
+	allKeys := ch.Credentials.GetAllCredentialRefs()
 	if len(allKeys) == 0 {
 		return nil, fmt.Errorf("no API keys configured for channel")
 	}
@@ -718,13 +727,13 @@ func (processor *TestChannelOrchestrator) TestSingleAPIKey(
 		return nil, xerrors.ForbiddenError("channel testing is not available to plugins")
 	}
 
-	ch, err := processor.channelService.GetChannel(ctx, channelID.ID)
+	ch, err := processor.channelService.GetChannelForCredentialTest(ctx, channelID.ID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Verify the provided key is actually configured for this channel.
-	channelKeys := channelCredentialRefs(ch)
+	channelKeys := ch.Credentials.GetAllCredentialRefs()
 	if len(channelKeys) == 0 {
 		return nil, fmt.Errorf("no API keys configured for channel")
 	}
@@ -776,7 +785,7 @@ func (processor *TestChannelOrchestrator) testSingleKey(
 ) *TestAPIKeyResult {
 	keyPrefix := keyDisplayName
 	if keyPrefix == "" {
-		keyPrefix = xsecret.MaskAPIKey(key)
+		keyPrefix = testCredentialPrefix(key)
 	}
 
 	inbound, body, err := processor.buildChannelTestInput(ctx, testModel, useStream, systemPrompt, userPrompt, responsesWebSocket, apiFormat)

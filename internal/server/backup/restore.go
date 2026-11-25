@@ -717,6 +717,8 @@ func (svc *BackupService) restoreChannels(ctx context.Context, db *ent.Client, c
 			return err
 		}
 
+		// A keyless channel legitimately carries no credentials at all, so an empty
+		// credential set is not by itself a reason to skip the record during restore.
 		credentials := chData.Credentials
 
 		var baseURL *string

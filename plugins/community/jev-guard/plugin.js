@@ -2,6 +2,7 @@ import {
   MAX_TEXT,
   anyCheck,
   apiKeyOf,
+  billableText,
   blockMessage,
   buildRequest,
   decide,
@@ -38,8 +39,11 @@ export async function onRequest(ctx, req) {
 }
 
 async function judge(req, ctx, policy) {
-  const raw = extractText(req).trim();
-  if (raw.length < policy.minChars) {
+  const raw = extractText(req, policy.maxTurns).trim();
+  // Only the marker generated for dropped history is excluded from the length gate.
+  // A request whose retained messages carry no text must not be billed, but Jev still
+  // receives the marker so it knows earlier messages were left out.
+  if (billableText(raw).length < policy.minChars) {
     return pass();
   }
   if (!policy.endpointValid) {
